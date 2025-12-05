@@ -55,7 +55,6 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'officekhaja.urls'
-AUTH_USER_MODEL = 'khaja.CustomUser'
 
 TEMPLATES = [
     {
