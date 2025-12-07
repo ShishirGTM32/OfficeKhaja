@@ -41,6 +41,7 @@ INSTALLED_APPS = [
     'django.contrib.messages',
     'django.contrib.staticfiles',
     'rest_framework',
+    'rest_framework.authtoken',
     'khaja',
     'orders',
     'users'
@@ -75,6 +76,7 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'officekhaja.wsgi.application'
+AUTH_USER_MODEL = "users.CustomUser"
 
 
 # Database
@@ -116,7 +118,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Kathmandu'  
-USE_I18N = True
+USE_I18N = True 
 USE_TZ = True
 
 REST_FRAMEWORK = {
