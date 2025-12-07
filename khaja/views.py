@@ -224,7 +224,6 @@ class NutritionView(APIView):
 
 
 class CustomMealListView(APIView):
-    #need to specify users for the meals and corresponding custom meal to be set
     permission_classes = [AllowAny]
 
     def get(self, request):

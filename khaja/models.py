@@ -171,3 +171,4 @@ class CustomMeal(models.Model):
     class Meta:
         verbose_name_plural = "Custom Meals"
         ordering = ['-created_at']
+

@@ -1,10 +1,11 @@
 from rest_framework import serializers
 from orders.models import Order, OrderItem, Cart, CartItem
-from khaja.models import  CustomMeal
-from khaja.serializers import CustomMealSerializer
+from khaja.models import  CustomMeal, Meals
+from khaja.serializers import CustomMealSerializer, MealSerializer
 
 class OrderItemSerializer(serializers.ModelSerializer):
     custom_meal_details = CustomMealSerializer(source='custom_meal', read_only=True)
+    meal_details = MealSerializer(source='meals', read_only=True) 
     total_price = serializers.DecimalField(
         max_digits=10, 
         decimal_places=2, 
@@ -15,11 +16,12 @@ class OrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = [
-            'id', 'custom_meal', 'custom_meal_details', 'meal_type', 
-            'meal_category', 'no_of_servings', 'preferences', 
+            'id', 'custom_meal', 'custom_meal_details', 'meals', 'meal_details',
+            'meal_type', 'meal_category', 'no_of_servings', 'preferences', 
             'subscription_plan', 'delivery_time', 'price_per_serving',
             'quantity', 'meal_items_snapshot', 'total_price'
         ]
+
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -40,15 +42,15 @@ class OrderSerializer(serializers.ModelSerializer):
 
 class OrderCreateSerializer(serializers.Serializer):
     delivery_address = serializers.CharField()
-    delivery_time = serializers.DateTimeField()
+    delivery_time = serializers.DateTimeField(required=False, allow_null=True)
     payment_method = serializers.ChoiceField(choices=Order.PAYMENT_METHOD)
     notes = serializers.CharField(required=False, allow_blank=True)
 
 
-# ===================== CART SERIALIZERS =====================
-
 class CartItemSerializer(serializers.ModelSerializer):
     custom_meal_details = CustomMealSerializer(source='custom_meal', read_only=True)
+    meal_details = MealSerializer(source='meals', read_only=True)
+
     price_per_item = serializers.DecimalField(
         max_digits=10, 
         decimal_places=2, 
@@ -63,23 +65,31 @@ class CartItemSerializer(serializers.ModelSerializer):
     )
     
     custom_meal_id = serializers.IntegerField(write_only=True, required=False)
+    meal_id = serializers.IntegerField(write_only=True, required=False)
 
     class Meta:
         model = CartItem
         fields = [
             'id', 'custom_meal', 'custom_meal_id', 'custom_meal_details',
+            'meals', 'meal_id', 'meal_details',
             'quantity', 'price_per_item', 'total_price', 'added_at'
         ]
         read_only_fields = ['id', 'added_at']
 
     def create(self, validated_data):
         custom_meal_id = validated_data.pop('custom_meal_id', None)
-        
+        meal_id = validated_data.pop('meal_id', None)
+
         if custom_meal_id:
             custom_meal = CustomMeal.objects.get(combo_id=custom_meal_id)
             validated_data['custom_meal'] = custom_meal
-        
+
+        if meal_id:
+            meal = Meals.objects.get(id=meal_id)
+            validated_data['meals'] = meal
+
         return super().create(validated_data)
+
 
 
 class CartSerializer(serializers.ModelSerializer):
