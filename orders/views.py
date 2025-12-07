@@ -223,8 +223,7 @@ class OrderListView(APIView):
                     )
 
             order.calculate_pricing()
-            cart.clear()
-
+            cart.delete()
             order_serializer = OrderSerializer(order)
             return Response(order_serializer.data, status=status.HTTP_201_CREATED)
 
@@ -238,12 +237,12 @@ class OrderDetailView(APIView):
         return get_object_or_404(Order, pk=pk, user=user)
 
     def get(self, request, pk):
-        order = self.get_object(pk, request.user)
+        order = self.get_object(pk, user=None)
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, pk):
-        order = self.get_object(pk, request.user)
+        order = self.get_object(pk)
 
         if 'status' in request.data:
             new_status = request.data['status']
@@ -254,7 +253,6 @@ class OrderDetailView(APIView):
                     order.save()
                 else:
                     return Response({"error": "Cannot cancel order in current status"}, status=status.HTTP_400_BAD_REQUEST)
-            elif request.user.is_staff:
                 order.status = new_status
                 order.save()
             else:

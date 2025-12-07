@@ -39,12 +39,17 @@ class Order(models.Model):
         ordering = ['-created_at']
 
     def calculate_pricing(self):
-        self.subtotal = sum(item.get_total_price() for item in self.order_items.all())
-        self.tax = self.subtotal * Decimal('0.13')
-        self.delivery_charge = Decimal('50.00')
-        self.total_price = self.subtotal + self.tax + self.delivery_charge
-        self.save()
-        return self.total_price
+            subtotal = sum(item.get_total_price() for item in self.order_items.all())
+            tax_rate = Decimal('0.13')  
+            delivery_charge = Decimal('50.00') 
+
+            tax = subtotal * tax_rate
+            total_price = subtotal + tax + delivery_charge
+            self.subtotal = subtotal
+            self.tax = tax
+            self.delivery_charge = delivery_charge
+            self.total_price = total_price
+            self.save()
 
 
     def __str__(self):
