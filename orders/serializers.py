@@ -2,7 +2,6 @@ from rest_framework import serializers
 from orders.models import Order, OrderItem, Cart, CartItem
 from khaja.models import  CustomMeal
 from khaja.serializers import CustomMealSerializer
-from django.contrib.auth.models import User
 
 class OrderItemSerializer(serializers.ModelSerializer):
     custom_meal_details = CustomMealSerializer(source='custom_meal', read_only=True)
@@ -45,69 +44,8 @@ class OrderCreateSerializer(serializers.Serializer):
     payment_method = serializers.ChoiceField(choices=Order.PAYMENT_METHOD)
     notes = serializers.CharField(required=False, allow_blank=True)
 
-    def create(self, validated_data):
-        user = self.context['request'].user
-        
-        # Get cart
-        cart = Cart.objects.filter(user=user).first()
-        if not cart or not cart.cart_items.exists():
-            raise serializers.ValidationError("Cart is empty")
-        
-        # Create order
-        order = Order.objects.create(
-            user=user,
-            delivery_address=validated_data['delivery_address'],
-            delivery_time=validated_data['delivery_time'],
-            payment_method=validated_data['payment_method'],
-            notes=validated_data.get('notes', '')
-        )
-        
-        # Create order items from cart items
-        for cart_item in cart.cart_items.all():
-            custom_meal = cart_item.custom_meal
-            
-            # Create meal items snapshot
-            meal_items_snapshot = []
-            if custom_meal.meals:
-                for meal in custom_meal.meals.meals.all():
-                    meal_data = {
-                        'meal_id': meal.meal_id,
-                        'name': meal.name,
-                        'type': meal.type,
-                        'price': str(meal.price),
-                        'weight': meal.weight
-                    }
-                    if hasattr(meal, 'nutrition'):
-                        meal_data['nutrition'] = {
-                            'energy': str(meal.nutrition.energy),
-                            'protein': str(meal.nutrition.protein),
-                            'carbs': str(meal.nutrition.carbs),
-                            'fats': str(meal.nutrition.fats),
-                        }
-                    meal_items_snapshot.append(meal_data)
-            
-            OrderItem.objects.create(
-                order=order,
-                custom_meal=custom_meal,
-                meal_type=custom_meal.type,
-                meal_category=custom_meal.category,
-                no_of_servings=custom_meal.no_of_servings,
-                preferences=custom_meal.preferences,
-                subscription_plan=custom_meal.subscription_plan,
-                delivery_time=custom_meal.delivery_time,
-                price_per_serving=custom_meal.get_total_price() / custom_meal.no_of_servings if custom_meal.no_of_servings > 0 else 0,
-                quantity=cart_item.quantity,
-                meal_items_snapshot=meal_items_snapshot
-            )
-        
-        # Calculate pricing
-        order.calculate_pricing()
-        
-        # Clear cart
-        cart.clear()
-        
-        return order
 
+# ===================== CART SERIALIZERS =====================
 
 class CartItemSerializer(serializers.ModelSerializer):
     custom_meal_details = CustomMealSerializer(source='custom_meal', read_only=True)
@@ -133,14 +71,6 @@ class CartItemSerializer(serializers.ModelSerializer):
             'quantity', 'price_per_item', 'total_price', 'added_at'
         ]
         read_only_fields = ['id', 'added_at']
-
-    def validate_custom_meal_id(self, value):
-        request_user = self.context['request'].user
-        try:
-            custom_meal = CustomMeal.objects.get(combo_id=value, user=request_user)
-            return custom_meal.combo_id
-        except CustomMeal.DoesNotExist:
-            raise serializers.ValidationError("Custom meal not found or doesn't belong to you")
 
     def create(self, validated_data):
         custom_meal_id = validated_data.pop('custom_meal_id', None)

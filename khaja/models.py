@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import User
+from django.contrib.postgres.fields import ArrayField
 
 class Meals(models.Model):
     MEAL_TYPE = [
@@ -30,16 +31,50 @@ class Meals(models.Model):
         verbose_name_plural = "Meals"
 
 
-class Ingredients(models.Model):
-    iid = models.AutoField(primary_key=True)
-    meals = models.ForeignKey(Meals, on_delete=models.CASCADE, related_name='ingredients')
-    ingredient_name = models.CharField(max_length=50)
-
+class Ingredient(models.Model):
+    """Master ingredient table"""
+    id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=100, unique=True)
+    category = models.CharField(max_length=50, blank=True, null=True)
+    
     def __str__(self):
-        return self.ingredient_name
+        return self.name
 
     class Meta:
         verbose_name_plural = "Ingredients"
+        ordering = ['name']
+
+
+class MealIngredient(models.Model):
+    meal = models.OneToOneField(Meals, on_delete=models.CASCADE, related_name='meal_ingredients', primary_key=True)
+    ingredient_ids = ArrayField(
+        models.IntegerField(),
+        default=list,
+        blank=True,
+        help_text="List of ingredient IDs"
+    )
+    
+    def get_ingredients(self):
+        """Get actual ingredient objects from IDs"""
+        return Ingredient.objects.filter(id__in=self.ingredient_ids)
+    
+    def add_ingredient(self, ingredient_id):
+        """Add an ingredient ID to the array"""
+        if ingredient_id not in self.ingredient_ids:
+            self.ingredient_ids.append(ingredient_id)
+            self.save()
+    
+    def remove_ingredient(self, ingredient_id):
+        """Remove an ingredient ID from the array"""
+        if ingredient_id in self.ingredient_ids:
+            self.ingredient_ids.remove(ingredient_id)
+            self.save()
+    
+    def __str__(self):
+        return f"Ingredients for {self.meal.name}"
+
+    class Meta:
+        verbose_name_plural = "Meal Ingredients"
 
 
 class Nutrition(models.Model):
@@ -111,14 +146,13 @@ class CustomMeal(models.Model):
     ]
 
     combo_id = models.AutoField(primary_key=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='custom_meals')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='custom_meals', null=True)
     type = models.CharField(max_length=20, choices=MEAL_TYPE, default="VEG")
     meals = models.ForeignKey(Combo, on_delete=models.CASCADE, null=True, related_name='custom_meals')
     category = models.CharField(max_length=50, choices=MEAL_CATEGORY)
     no_of_servings = models.IntegerField(default=1, help_text="Number of people")
     preferences = models.TextField(blank=True)
     
-    # New fields based on the UI
     subscription_plan = models.CharField(max_length=20, choices=SUBSCRIPTION_PLAN, default="ONE_TIME")
     delivery_time = models.DateTimeField(null=True, blank=True)
     delivery_address = models.TextField(blank=True)

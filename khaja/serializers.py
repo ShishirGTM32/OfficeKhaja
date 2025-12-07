@@ -1,10 +1,29 @@
 from rest_framework import serializers
-from khaja.models import Meals, Nutrition, CustomMeal, Combo, Ingredients
+from .models import Meals, Nutrition, CustomMeal, Combo, Ingredient, MealIngredient
+from django.contrib.auth.models import User
 
-class IngredientsSerializer(serializers.ModelSerializer):
+
+class IngredientSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Ingredients
-        fields = ['iid', 'ingredient_name']
+        model = Ingredient
+        fields = ['id', 'name', 'category']
+
+
+class MealIngredientSerializer(serializers.ModelSerializer):
+    ingredients = serializers.SerializerMethodField()
+    ingredient_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        write_only=True
+    )
+
+    class Meta:
+        model = MealIngredient
+        fields = ['meal', 'ingredient_ids', 'ingredients']
+
+    def get_ingredients(self, obj):
+        ingredients = obj.get_ingredients()
+        return IngredientSerializer(ingredients, many=True).data
 
 
 class NutritionSerializer(serializers.ModelSerializer):
@@ -16,13 +35,24 @@ class NutritionSerializer(serializers.ModelSerializer):
 
 class MealSerializer(serializers.ModelSerializer):
     nutrition = NutritionSerializer(read_only=True)
-    ingredients = IngredientsSerializer(many=True, read_only=True)
+    ingredients = serializers.SerializerMethodField()
+    ingredient_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
     
     class Meta:
         model = Meals
         fields = ['meal_id', 'name', 'type', 'description', 'meal_category', 
-                  'price', 'image', 'weight', 'nutrition', 'ingredients']
+                  'price', 'image', 'weight', 'nutrition', 'ingredients', 'ingredient_ids']
         read_only_fields = ['meal_id']
+
+    def get_ingredients(self, obj):
+        if hasattr(obj, 'meal_ingredients'):
+            ingredients = obj.meal_ingredients.get_ingredients()
+            return IngredientSerializer(ingredients, many=True).data
+        return []
 
 
 class ComboSerializer(serializers.ModelSerializer):
@@ -63,31 +93,3 @@ class CustomMealSerializer(serializers.ModelSerializer):
 
     def get_total_price(self, obj):
         return obj.get_total_price()
-
-    def create(self, validated_data):
-        meal_ids = validated_data.pop("meal_ids")
-        meals = Meals.objects.filter(meal_id__in=meal_ids)
-        if meals.count() != len(meal_ids):
-            raise serializers.ValidationError("Some meal IDs are invalid")
-        combo = Combo.objects.create()
-        combo.meals.set(meals)
-        custom_meal = CustomMeal.objects.create(
-            meals=combo,
-            **validated_data
-        )
-
-        return custom_meal
-
-    def update(self, instance, validated_data):
-        meal_ids = validated_data.pop("meal_ids", None)
-        
-        if meal_ids:
-            meals = Meals.objects.filter(meal_id__in=meal_ids)
-            if meals.count() != len(meal_ids):
-                raise serializers.ValidationError("Some meal IDs are invalid")
-            instance.meals.meals.set(meals)
-        for attr, value in validated_data.items():
-            setattr(instance, attr, value)
-        instance.save()
-        
-        return instance
