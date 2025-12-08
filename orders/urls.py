@@ -1,13 +1,18 @@
 from django.urls import path
 from .views import (
-    CartView, CartItemListView, CartItemDetailView, OrderListView, OrderDetailView, OrderCancelView
+    CartView,
+    CartItemListView,
+    CartItemDetailView,
+    OrderListView,
+    OrderDetailView,
+    OrderCancelView
 )
-
-app_name = 'orders'
 
 urlpatterns = [
     path('cart/', CartView.as_view(), name='cart'),
-    path('cart/items/', CartItemListView.as_view(), name='cart-items'),
+    path('cart/clear/', CartView.as_view(), name='clear-cart'), 
+    
+    path('cart/items/', CartItemListView.as_view(), name='cart-item-list'),
     path('cart/items/<int:pk>/', CartItemDetailView.as_view(), name='cart-item-detail'),
     
     path('orders/', OrderListView.as_view(), name='order-list'),

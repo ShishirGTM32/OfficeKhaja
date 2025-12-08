@@ -3,19 +3,20 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
-from khaja.models import Meals, CustomMeal
+from django.utils import timezone
+from khaja.models import Meals, CustomMeal, Combo
 from decimal import Decimal
-from orders.models import Order, Cart, CartItem, OrderItem
+from datetime import datetime
+from orders.models import Order, Cart, CartItem, ComboCartItem, OrderItem, ComboOrderItem
 from .serializers import (
-    OrderSerializer, OrderCreateSerializer, CartSerializer, CartItemSerializer
-)
+    OrderSerializer, CartSerializer, CartItemSerializer, ComboCartItemSerializer, OrderCreateSerializer )
 
 
 class CartView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        cart, created = Cart.objects.get_or_create()
+        cart, created = Cart.objects.get_or_create(user_id=self.request.user.id)
         serializer = CartSerializer(cart)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -29,96 +30,255 @@ class CartView(APIView):
 
 
 class CartItemListView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        cart, created = Cart.objects.get_or_create()
+        cart, created = Cart.objects.get_or_create(user=self.request.user.id)
+        
         cart_items = cart.cart_items.all()
-        serializer = CartItemSerializer(cart_items, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        combo_items = cart.combo_cart_items.all()
+        
+        cart_serializer = CartItemSerializer(cart_items, many=True)
+        combo_serializer = ComboCartItemSerializer(combo_items, many=True)
+        
+        return Response({
+            'cart_items': cart_serializer.data,
+            'combo_items': combo_serializer.data
+        }, status=status.HTTP_200_OK)
 
     def post(self, request):
-        cart, created = Cart.objects.get_or_create()
+        cart, created = Cart.objects.get_or_create(user_id=request.user.id)
         custom_meal_id = request.data.get('custom_meal_id')
         meal_id = request.data.get("meal_id")
-        if custom_meal_id or meal_id:
-            if custom_meal_id:
-                try:
-                    custom_meal = CustomMeal.objects.get(combo_id=custom_meal_id)
-                    existing_item = CartItem.objects.filter(cart=cart, custom_meal=custom_meal.combo_id).first()
+        combo_id = request.data.get("combo_id")
+        delivery_time_slot = request.data.get('delivery_time_slot')
+        delivery_time = request.data.get('delivery_time')
+        preferences = request.data.get('preferences', '')
 
-                    if existing_item:
-                        existing_item.quantity += int(request.data.get('quantity', 1))
-                        existing_item.save()
-                        serializer = CartItemSerializer(existing_item)
-                        return Response(serializer.data, status=status.HTTP_200_OK)
-        
-                except CustomMeal.DoesNotExist:
-                    return Response({"error": "Custom meal not found or doesn't belong to you"}, status=status.HTTP_404_NOT_FOUND)        
-            elif meal_id:
-                try:
-                    meal = Meals.objects.get(meal_id=meal_id)
-                    existing_item = CartItem.objects.filter(cart=cart, meals_id = meal.meal_id).first()
+        if combo_id:
+            try:
+                combo = Combo.objects.get(cid=combo_id)
+                subscription_plan = request.data.get('subscription_plan')
+                delivery_from_date = request.data.get('delivery_from_date')
+                delivery_to_date = request.data.get('delivery_to_date')
+                
+                if not subscription_plan:
+                    return Response({
+                        "error": "Subscription plan is required for combo meals"
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                
+                from_date = None
+                to_date = None
+                if delivery_from_date:
+                    from_date = datetime.strptime(delivery_from_date, '%Y-%m-%d').date()
+                if delivery_to_date:
+                    to_date = datetime.strptime(delivery_to_date, '%Y-%m-%d').date()
+                
+                delivery_datetime = None
+                if delivery_time:
+                    delivery_datetime = datetime.fromisoformat(delivery_time.replace('Z', '+00:00'))
+                
+                existing_item = ComboCartItem.objects.filter(
+                    cart=cart, 
+                    combo=combo, 
+                    subscription_plan=subscription_plan
+                ).first()
 
-                    if existing_item:
-                        existing_item.quantity += int(request.data.get('quantity', 1))
-                        existing_item.save()
-                        serializer = CartItemSerializer(existing_item)
-                        return Response(serializer.data, status=status.HTTP_200_OK)
-
-                except Meals.DoesNotExist:
-                    return Response({"error": "Meal id not found."}, status=status.HTTP_404_NOT_FOUND)
+                if existing_item:
+                    existing_item.quantity += int(request.data.get('quantity', 1))
+                    if delivery_time_slot:
+                        existing_item.delivery_time_slot = delivery_time_slot
+                    if delivery_datetime:
+                        existing_item.delivery_time = delivery_datetime
+                    existing_item.save()
+                    serializer = ComboCartItemSerializer(existing_item)
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+                
+                combo_item = ComboCartItem.objects.create(
+                    cart=cart,
+                    combo=combo,
+                    quantity=int(request.data.get('quantity', 1)),
+                    subscription_plan=subscription_plan,
+                    delivery_from_date=from_date,
+                    delivery_to_date=to_date,
+                    delivery_time_slot=delivery_time_slot,
+                    delivery_time=delivery_datetime,
+                    preferences=preferences
+                )
+                serializer = ComboCartItemSerializer(combo_item)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+                
+            except Combo.DoesNotExist:
+                return Response({"error": "Combo not found"}, status=status.HTTP_404_NOT_FOUND)
             
-            else:
-                return Response({"error":"Meal id or custom meal id is required"}, status=status.HTTP_404_NOT_FOUND)
-            
-        serializer = CartItemSerializer(data=request.data, context={'request': request})
-        if serializer.is_valid():
-            if custom_meal_id:
-                serializer.save(cart=cart, custom_meal=custom_meal)
-            elif meal_id:
-                serializer.save(cart=cart, meals_id = meal.meal_id)
-            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        if custom_meal_id:
+            try:
+                custom_meal = CustomMeal.objects.get(combo_id=custom_meal_id, user_id=request.user.id)
+                
+                delivery_datetime = None
+                if delivery_time:
+                    delivery_datetime = datetime.fromisoformat(delivery_time.replace('Z', '+00:00'))
+                elif custom_meal.delivery_time:
+                    delivery_datetime = custom_meal.delivery_time
+                
+                if not delivery_time_slot and custom_meal.delivery_time_slot:
+                    delivery_time_slot = custom_meal.delivery_time_slot
+                
+                existing_item = CartItem.objects.filter(cart=cart, custom_meal=custom_meal).first()
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+                if existing_item:
+                    existing_item.quantity += int(request.data.get('quantity', 1))
+                    if delivery_time_slot:
+                        existing_item.delivery_time_slot = delivery_time_slot
+                    if delivery_datetime:
+                        existing_item.delivery_time = delivery_datetime
+                    if preferences:
+                        existing_item.preferences = preferences
+                    existing_item.save()
+                    serializer = CartItemSerializer(existing_item)
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+                
+                cart_item = CartItem.objects.create(
+                    cart=cart,
+                    custom_meal=custom_meal,
+                    quantity=int(request.data.get('quantity', 1)),
+                    delivery_time_slot=delivery_time_slot,
+                    delivery_time=delivery_datetime,
+                    preferences=preferences
+                )
+                serializer = CartItemSerializer(cart_item)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+            except CustomMeal.DoesNotExist:
+                return Response({
+                    "error": "Custom meal not found or doesn't belong to you"
+                }, status=status.HTTP_404_NOT_FOUND)
+
+        elif meal_id:
+            try:
+                meal = Meals.objects.get(meal_id=meal_id)
+
+                delivery_datetime = None
+                if delivery_time:
+                    delivery_datetime = datetime.fromisoformat(delivery_time.replace('Z', '+00:00'))
+                
+                existing_item = CartItem.objects.filter(cart=cart, meals=meal).first()
+
+                if existing_item:
+                    existing_item.quantity += int(request.data.get('quantity', 1))
+                    if delivery_time_slot:
+                        existing_item.delivery_time_slot = delivery_time_slot
+                    if delivery_datetime:
+                        existing_item.delivery_time = delivery_datetime
+                    if preferences:
+                        existing_item.preferences = preferences
+                    existing_item.save()
+                    serializer = CartItemSerializer(existing_item)
+                    return Response(serializer.data, status=status.HTTP_200_OK)
+                
+                cart_item = CartItem.objects.create(
+                    cart=cart,
+                    meals=meal,
+                    quantity=int(request.data.get('quantity', 1)),
+                    delivery_time_slot=delivery_time_slot,
+                    delivery_time=delivery_datetime,
+                    preferences=preferences
+                )
+                serializer = CartItemSerializer(cart_item)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+            except Meals.DoesNotExist:
+                return Response({"error": "Meal not found."}, status=status.HTTP_404_NOT_FOUND)
+        else:
+            return Response({
+                "error": "Either meal_id, custom_meal_id, or combo_id is required"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CartItemDetailView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get_object(self, pk, user):
+        item_type = self.request.query_params.get('type', 'meal')
+        if item_type == 'combo':
+            return get_object_or_404(ComboCartItem, pk=pk, cart__user=user)
         return get_object_or_404(CartItem, pk=pk, cart__user=user)
 
     def get(self, request, pk):
         cart_item = self.get_object(pk, request.user)
-        serializer = CartItemSerializer(cart_item)
+        item_type = request.query_params.get('type', 'meal')
+        
+        if item_type == 'combo':
+            serializer = ComboCartItemSerializer(cart_item)
+        else:
+            serializer = CartItemSerializer(cart_item)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, pk):
         cart_item = self.get_object(pk, request.user)
         quantity = request.data.get('quantity')
+        delivery_time_slot = request.data.get('delivery_time_slot')
+        delivery_time = request.data.get('delivery_time')
+        preferences = request.data.get('preferences')
 
         if quantity:
             if int(quantity) <= 0:
-                return Response({"error": "Quantity must be greater than 0"}, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"error": "Quantity must be greater than 0"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
             cart_item.quantity = quantity
-            cart_item.save()
+        
+        if preferences is not None:
+            cart_item.preferences = preferences
+        
+        if delivery_time_slot:
+            valid_slots = [choice[0] for choice in CartItem.DELIVERY_TIME_SLOTS]
+            if delivery_time_slot not in valid_slots:
+                return Response(
+                    {"error": f"Invalid delivery time slot. Choose from: {', '.join(valid_slots)}"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            cart_item.delivery_time_slot = delivery_time_slot
+        if delivery_time:
+            try:
+                delivery_datetime = datetime.fromisoformat(delivery_time.replace('Z', '+00:00'))
+                if delivery_datetime < timezone.now():
+                    return Response(
+                        {"error": "Delivery time must be in the future"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                cart_item.delivery_time = delivery_datetime
+            except ValueError:
+                return Response(
+                    {"error": "Invalid datetime format. Use ISO format (YYYY-MM-DDTHH:MM:SS)"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+        
+        cart_item.save()
 
-        serializer = CartItemSerializer(cart_item)
+        item_type = request.query_params.get('type', 'meal')
+        if item_type == 'combo':
+            serializer = ComboCartItemSerializer(cart_item)
+        else:
+            serializer = CartItemSerializer(cart_item)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def delete(self, request, pk):
         cart_item = self.get_object(pk, request.user)
         cart_item.delete()
-        return Response({"message": "Item removed from cart"}, status=status.HTTP_204_NO_CONTENT)
-
+        return Response(
+            {"message": "Item removed from cart"}, 
+            status=status.HTTP_204_NO_CONTENT
+        )
+    
 
 class OrderListView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get(self, request):
         status_filter = request.query_params.get('status', None)
-        orders = Order.objects.filter()
+        orders = Order.objects.filter(user_id=self.request.user.id)
 
         if status_filter:
             orders = orders.filter(status=status_filter.upper())
@@ -130,24 +290,49 @@ class OrderListView(APIView):
         serializer = OrderCreateSerializer(data=request.data, context={'request': request})
 
         if serializer.is_valid():
-            cart = Cart.objects.filter().first()
+            cart = Cart.objects.filter(user=request.user).first()
+            cart_item_ids = serializer.validated_data.get('cart_item_ids', [])
+            combo_item_ids = serializer.validated_data.get('combo_item_ids', [])
+            
+            # Get cart items
+            if cart_item_ids:
+                cart_items = cart.cart_items.filter(id__in=cart_item_ids)
+            else:
+                cart_items = cart.cart_items.all()
+            
+            # Get combo items
+            if combo_item_ids:
+                combo_items = cart.combo_cart_items.filter(id__in=combo_item_ids)
+            else:
+                combo_items = cart.combo_cart_items.all()
 
-            if not cart or not cart.cart_items.exists():
-                return Response({"error": "Cart is empty"}, status=status.HTTP_400_BAD_REQUEST)
-
+            if not cart or (not cart_items.exists() and not combo_items.exists()):
+                return Response(
+                    {"error": "No items in cart to order"}, 
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create order
             order = Order.objects.create(
-                delivery_address=serializer.validated_data['delivery_address'],
-                delivery_time=serializer.validated_data['delivery_time'],
-                payment_method=serializer.validated_data['payment_method'],
-                notes=serializer.validated_data.get('notes', '')
+                user=request.user,
+                notes=serializer.validated_data.get('notes', ''),
+                delivery_address=serializer.validated_data.get(
+                    'delivery_address', 
+                    request.user.street_address
+                ),
+                payment_method=serializer.validated_data.get(
+                    'payment_method', 
+                    request.user.payment_method
+                ),
             )
 
-            for cart_item in cart.cart_items.all():
+            # Process regular cart items
+            for cart_item in cart_items:
                 meal_items_snapshot = []
 
                 if cart_item.custom_meal:
                     custom_meal = cart_item.custom_meal
-                    for meal in custom_meal.meals.meals.all():
+                    for meal in custom_meal.meals.all():
                         meal_data = {
                             'meal_id': meal.meal_id,
                             'name': meal.name,
@@ -173,12 +358,11 @@ class OrderListView(APIView):
                     OrderItem.objects.create(
                         order=order,
                         custom_meal=custom_meal,
-                        meal_type=custom_meal.type,
                         meal_category=custom_meal.category,
                         no_of_servings=custom_meal.no_of_servings,
-                        preferences=custom_meal.preferences,
-                        subscription_plan=custom_meal.subscription_plan,
-                        delivery_time=custom_meal.delivery_time,
+                        preferences=cart_item.preferences or custom_meal.preferences,
+                        delivery_time_slot=cart_item.delivery_time_slot,
+                        delivery_datetime=custom_meal.delivery_time,
                         price_per_serving=custom_meal.get_total_price() / custom_meal.no_of_servings if custom_meal.no_of_servings > 0 else Decimal('0.00'),
                         quantity=cart_item.quantity,
                         meal_items_snapshot=meal_items_snapshot
@@ -211,38 +395,66 @@ class OrderListView(APIView):
                     OrderItem.objects.create(
                         order=order,
                         meals=meal,
-                        meal_type=meal.type,
-                        meal_category=meal.meal_category,
+                        meal_category=meal.meal_category if hasattr(meal, 'meal_category') else 'REGULAR',
                         no_of_servings=1,
-                        preferences='',
-                        subscription_plan='ONE_TIME',
-                        delivery_time=None,
+                        preferences=cart_item.preferences,
+                        delivery_time_slot=cart_item.delivery_time_slot,
                         price_per_serving=meal.price,
                         quantity=cart_item.quantity,
                         meal_items_snapshot=meal_items_snapshot
                     )
 
+            # Process combo cart items
+            for combo_item in combo_items:
+                combo = combo_item.combo
+                
+                # Create snapshot of combo data
+                combo_items_snapshot = {
+                    'combo_id': combo.id,
+                    'name': combo.name,
+                    'description': combo.description if hasattr(combo, 'description') else '',
+                    'price': str(combo.price)
+                }
+                
+                ComboOrderItem.objects.create(
+                    order=order,
+                    combo=combo,
+                    subscription_plan=combo_item.subscription_plan,
+                    delivery_from_date=combo_item.delivery_from_date,
+                    delivery_to_date=combo_item.delivery_to_date,
+                    quantity=combo_item.quantity,
+                    preferences=combo_item.preferences,
+                    price_snapshot=combo.price,
+                    combo_items_snapshot=combo_items_snapshot
+                )
+
+            # Calculate pricing
             order.calculate_pricing()
-            cart.delete()
-            order_serializer = OrderSerializer(order)
+            
+            # Delete ordered items from cart
+            cart_items.delete()
+            combo_items.delete()
+
+            order_serializer = OrderSerializer(order, context={'request': request})
+
             return Response(order_serializer.data, status=status.HTTP_201_CREATED)
 
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class OrderDetailView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def get_object(self, pk, user):
         return get_object_or_404(Order, pk=pk, user=user)
 
     def get(self, request, pk):
-        order = self.get_object(pk, user=None)
+        order = self.get_object(pk, request.user)
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, pk):
-        order = self.get_object(pk)
+        order = self.get_object(pk, user=self.request.user)
 
         if 'status' in request.data:
             new_status = request.data['status']
@@ -251,12 +463,18 @@ class OrderDetailView(APIView):
                 if order.status in ['PENDING', 'PROCESSING']:
                     order.status = 'CANCELLED'
                     order.save()
+                    serializer = OrderSerializer(order)
+                    return Response(serializer.data, status=status.HTTP_200_OK)
                 else:
-                    return Response({"error": "Cannot cancel order in current status"}, status=status.HTTP_400_BAD_REQUEST)
-                order.status = new_status
-                order.save()
+                    return Response(
+                        {"error": "Cannot cancel order in current status"}, 
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
             else:
-                return Response({"error": "Permission denied"}, status=status.HTTP_403_FORBIDDEN)
+                return Response(
+                    {"error": "Only cancellation is allowed for users"}, 
+                    status=status.HTTP_403_FORBIDDEN
+                )
 
         if 'payment_status' in request.data and request.user.is_staff:
             order.payment_status = request.data['payment_status']
@@ -267,16 +485,22 @@ class OrderDetailView(APIView):
 
 
 class OrderCancelView(APIView):
-    permission_classes = [AllowAny]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request, pk):
-        order = get_object_or_404(Order, pk=pk)
+        order = get_object_or_404(Order, pk=pk, user=request.user)
 
-        if order.status not in ['PENDING', 'PROCESSING']:
-            return Response({"error": f"Cannot cancel order with status: {order.status}"}, status=status.HTTP_400_BAD_REQUEST)
+        if order.status not in ['PENDING']:
+            return Response(
+                {"error": f"Cannot cancel order with status: {order.status}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         order.status = 'CANCELLED'
         order.save()
 
         serializer = OrderSerializer(order)
-        return Response({"message": "Order cancelled successfully", "order": serializer.data}, status=status.HTTP_200_OK)
+        return Response(
+            {"message": "Order cancelled successfully", "order": serializer.data}, 
+            status=status.HTTP_200_OK
+        )

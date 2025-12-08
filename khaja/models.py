@@ -1,5 +1,6 @@
+# khaja/models.py
 from django.db import models
-from django.contrib.auth.models import User
+from users.models import CustomUser
 from django.contrib.postgres.fields import ArrayField
 
 class Meals(models.Model):
@@ -7,6 +8,7 @@ class Meals(models.Model):
         ("VEG", "Veg"),
         ("NON-VEG", "Non-veg"),
     ]
+    
     MEAL_TIME_TYPE = [
         ("MORNING BREAKFAST", "Morning Breakfast"),
         ("MORNING LUNCH", "Morning Lunch"),
@@ -32,7 +34,6 @@ class Meals(models.Model):
 
 
 class Ingredient(models.Model):
-    """Master ingredient table"""
     id = models.AutoField(primary_key=True)
     name = models.CharField(max_length=100, unique=True)
     category = models.CharField(max_length=50, blank=True, null=True)
@@ -55,17 +56,14 @@ class MealIngredient(models.Model):
     )
     
     def get_ingredients(self):
-        """Get actual ingredient objects from IDs"""
         return Ingredient.objects.filter(id__in=self.ingredient_ids)
     
     def add_ingredient(self, ingredient_id):
-        """Add an ingredient ID to the array"""
         if ingredient_id not in self.ingredient_ids:
             self.ingredient_ids.append(ingredient_id)
             self.save()
     
     def remove_ingredient(self, ingredient_id):
-        """Remove an ingredient ID from the array"""
         if ingredient_id in self.ingredient_ids:
             self.ingredient_ids.remove(ingredient_id)
             self.save()
@@ -139,22 +137,30 @@ class CustomMeal(models.Model):
         ("EVENING LUNCH", "Evening Lunch"),
         ("NIGHT DINNER", "Night Dinner")
     ]
-    SUBSCRIPTION_PLAN = [
-        ("WEEKLY", "Weekly Plan"),
-        ("MONTHLY", "Monthly Plan"),
-        ("ONE_TIME", "One Time"),
+    
+    DELIVERY_TIME_SLOTS = [
+        ("MORNING_BREAKFAST", "Morning Breakfast"),
+        ("LUNCH", "Lunch"),
+        ("EVENING_SNACK", "Evening Snack"),
+        ("DINNER", "Dinner"),
     ]
+    
+    TIME_SLOT_RANGES = {
+        "MORNING_BREAKFAST": ("07:00", "10:00"),
+        "LUNCH": ("11:00", "14:30"),
+        "EVENING_SNACK": ("15:00", "18:00"),
+        "DINNER": ("18:30", "22:00"),
+    }
 
     combo_id = models.AutoField(primary_key=True)
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='custom_meals', null=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='custom_meals')
     type = models.CharField(max_length=20, choices=MEAL_TYPE, default="VEG")
     meals = models.ForeignKey(Combo, on_delete=models.CASCADE, null=True, related_name='custom_meals')
     category = models.CharField(max_length=50, choices=MEAL_CATEGORY)
     no_of_servings = models.IntegerField(default=1, help_text="Number of people")
     preferences = models.TextField(blank=True)
-    
-    subscription_plan = models.CharField(max_length=20, choices=SUBSCRIPTION_PLAN, default="ONE_TIME")
-    delivery_time = models.DateTimeField(null=True, blank=True)
+    delivery_time_slot = models.CharField(max_length=50,choices=DELIVERY_TIME_SLOTS,null=True,blank=True,help_text="Preferred delivery time window")
+    delivery_time = models.DateTimeField(null=True, blank=True,help_text="Specific delivery date and time")
     delivery_address = models.TextField(blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
@@ -164,11 +170,24 @@ class CustomMeal(models.Model):
             base_price = self.meals.get_total_price()
             return base_price * self.no_of_servings
         return 0
+    
+    def get_time_slot_range(self):
+        if self.delivery_time_slot:
+            start, end = self.TIME_SLOT_RANGES.get(self.delivery_time_slot, ("", ""))
+            return f"{start} - {end}"
+        return ""
+    
+    def get_formatted_delivery_time(self):
+        if self.delivery_time:
+            date_str = self.delivery_time.strftime('%d %b %Y')
+            time_range = self.get_time_slot_range()
+            am_pm = self.delivery_time.strftime('%p')
+            return f"{date_str}, ({time_range}){am_pm}"
+        return ""
 
     def __str__(self):
-        return f"Custom Meal #{self.combo_id} - {self.category} for {self.user.username}"
+        return f"Custom Meal #{self.combo_id} - {self.category} for {self.user.first_name}"
 
     class Meta:
         verbose_name_plural = "Custom Meals"
         ordering = ['-created_at']
-
