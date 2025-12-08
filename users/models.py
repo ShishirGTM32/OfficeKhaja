@@ -3,6 +3,7 @@ from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.core.validators import RegexValidator
 from datetime import timedelta, datetime
+from django.utils import timezone
 
 
 class Subscription(models.Model):
@@ -19,6 +20,9 @@ class Subscription(models.Model):
 
     def __str__(self):
         return f"{self.subscription} - Rs. {self.rate}"
+
+    class Meta:
+        verbose_name_plural = "Subscriptions"
 
 
 class CustomUserManager(BaseUserManager):
@@ -76,9 +80,9 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     user_type = models.CharField(max_length=20, choices=USER_TYPE, default="INDIVIDUALS")
     no_of_peoples = models.IntegerField(default=1)
     payment_method = models.CharField(max_length=255, choices=PAYMENT_METHOD, default='ESEWA')
-    street_address = models.CharField(max_length=50, null=True, blank=True)    
+    street_address = models.CharField(max_length=255, null=True, blank=True)
     city = models.CharField(max_length=20, default="Kathmandu")
-    status = models.CharField(max_length=20, choices=SUBSCRIPTION_STATUS, default="NOT_STARTED")    
+    status = models.CharField(max_length=20, choices=SUBSCRIPTION_STATUS, default="NOT_STARTED")
     meal_preferences = models.TextField(null=True, blank=True)
     
     is_active = models.BooleanField(default=True)
@@ -94,19 +98,17 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     def __str__(self):
         return f"{self.first_name} {self.last_name} ({self.phone_number})"
 
+    class Meta:
+        verbose_name = "User"
+        verbose_name_plural = "Users"
+
 
 class UserSubscription(models.Model):
-    PAYMENT_STATUS = [
-        ("PAID", "Paid"),
-        ("UNPAID", "Unpaid")
-    ]
-    
     sub_id = models.AutoField(primary_key=True)
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='user_subscription')
     plan = models.ForeignKey(Subscription, on_delete=models.CASCADE)
     activated_from = models.DateField(null=True, blank=True)
     expires_on = models.DateField(null=True, blank=True)
-    payment_status = models.CharField(max_length=10, choices=PAYMENT_STATUS, default="UNPAID")
     is_active = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -120,5 +122,23 @@ class UserSubscription(models.Model):
                 self.activated_from = self.activated_from.date()
 
             self.expires_on = self.activated_from + timedelta(days=self.plan.duration_days)
+
+        if self.expires_on and self.expires_on < timezone.now().date():
+            self.is_active = False
         
         super().save(*args, **kwargs)
+
+    def is_expired(self):
+        if self.expires_on:
+            return self.expires_on < timezone.now().date()
+        return True
+
+    def days_remaining(self):
+        if self.expires_on and not self.is_expired():
+            delta = self.expires_on - timezone.now().date()
+            return delta.days
+        return 0
+
+    class Meta:
+        verbose_name = "User Subscription"
+        verbose_name_plural = "User Subscriptions"

@@ -2,6 +2,8 @@
 from django.db import models
 from users.models import CustomUser
 from django.contrib.postgres.fields import ArrayField
+from users.models import UserSubscription
+from datetime import datetime
 
 class Meals(models.Model):
     MEAL_TYPE = [
@@ -124,6 +126,7 @@ class Combo(models.Model):
         verbose_name_plural = "Combos"
 
 
+
 class CustomMeal(models.Model):
     MEAL_TYPE = [
         ("VEG", "Veg"),
@@ -153,12 +156,13 @@ class CustomMeal(models.Model):
     }
 
     combo_id = models.AutoField(primary_key=True)
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='custom_meals')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='custom_users')
     type = models.CharField(max_length=20, choices=MEAL_TYPE, default="VEG")
     meals = models.ForeignKey(Combo, on_delete=models.CASCADE, null=True, related_name='custom_meals')
     category = models.CharField(max_length=50, choices=MEAL_CATEGORY)
     no_of_servings = models.IntegerField(default=1, help_text="Number of people")
     preferences = models.TextField(blank=True)
+    subscription_plan = models.ForeignKey(UserSubscription, on_delete=models.CASCADE, null=True)
     delivery_time_slot = models.CharField(max_length=50,choices=DELIVERY_TIME_SLOTS,null=True,blank=True,help_text="Preferred delivery time window")
     delivery_time = models.DateTimeField(null=True, blank=True,help_text="Specific delivery date and time")
     delivery_address = models.TextField(blank=True)
@@ -173,17 +177,19 @@ class CustomMeal(models.Model):
     
     def get_time_slot_range(self):
         if self.delivery_time_slot:
-            start, end = self.TIME_SLOT_RANGES.get(self.delivery_time_slot, ("", ""))
-            return f"{start} - {end}"
-        return ""
-    
+            return self.TIME_SLOT_RANGES.get(self.delivery_time_slot, ("00:00", "00:00"))
+        return ("00:00", "00:00")
+
     def get_formatted_delivery_time(self):
         if self.delivery_time:
             date_str = self.delivery_time.strftime('%d %b %Y')
-            time_range = self.get_time_slot_range()
-            am_pm = self.delivery_time.strftime('%p')
-            return f"{date_str}, ({time_range}){am_pm}"
+            start_str, end_str = self.get_time_slot_range() 
+            start_time = datetime.strptime(start_str, '%H:%M').strftime('%I:%M %p')
+            end_time = datetime.strptime(end_str, '%H:%M').strftime('%I:%M %p')
+            return f"{date_str}, ({start_time}-{end_time})"
         return ""
+
+
 
     def __str__(self):
         return f"Custom Meal #{self.combo_id} - {self.category} for {self.user.first_name}"

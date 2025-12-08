@@ -1,10 +1,8 @@
-# users/views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
-from rest_framework_simplejwt.views import TokenObtainPairView
 from django.utils import timezone
 from datetime import timedelta
 from .models import CustomUser, UserSubscription, Subscription
@@ -18,7 +16,6 @@ from .serializers import (
 
 
 def get_tokens_for_user(user):
-    """Generate JWT tokens for user"""
     refresh = RefreshToken.for_user(user)
     return {
         'refresh': str(refresh),
@@ -72,9 +69,15 @@ class UserLogoutView(APIView):
             if refresh_token:
                 token = RefreshToken(refresh_token)
                 token.blacklist()
-            return Response({'message': 'Successfully logged out'}, status=status.HTTP_200_OK)
+            return Response(
+                {'message': 'Successfully logged out'}, 
+                status=status.HTTP_200_OK
+            )
         except Exception as e:
-            return Response({'error': 'Invalid token'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {'error': 'Invalid token'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
 
 class UserProfileView(APIView):
@@ -83,22 +86,31 @@ class UserProfileView(APIView):
     def get(self, request):
         user = request.user
         serializer = UserSerializer(user)
-        
-        # Include subscription info if available
         response_data = serializer.data
+        
         try:
             subscription = UserSubscription.objects.get(user=user)
             response_data['subscription'] = UserSubscriptionSerializer(subscription).data
         except UserSubscription.DoesNotExist:
             response_data['subscription'] = None
+            response_data['message'] = "No active subscription. Please subscribe to a plan."
             
         return Response(response_data, status=status.HTTP_200_OK)
 
     def put(self, request):
         user = request.user
+        payment_method = request.data.get('payment_method')
+        if payment_method:
+            valid_methods = [choice[0] for choice in CustomUser.PAYMENT_METHOD]
+            if payment_method not in valid_methods:
+                return Response({
+                    'error': f'Invalid payment method. Choose from: {", ".join(valid_methods)}'
+                }, status=status.HTTP_400_BAD_REQUEST)
+        
         serializer = UserSerializer(user, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
+        
         return Response({
             'user': serializer.data,
             'message': 'Profile updated successfully'
@@ -106,7 +118,6 @@ class UserProfileView(APIView):
 
 
 class SubscriptionListView(APIView):
-    """List all available subscription plans"""
     permission_classes = [AllowAny]
     
     def get(self, request):
@@ -119,9 +130,18 @@ class UserSubscriptionView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        """Get user's subscription details"""
         try:
             subscription = UserSubscription.objects.get(user=request.user)
+            
+            if subscription.expires_on < timezone.now().date():
+                subscription.is_active = False
+                subscription.payment_status = 'UNPAID'
+                subscription.save()
+                
+                user = request.user
+                user.status = 'EXPIRED'
+                user.save()
+            
             serializer = UserSubscriptionSerializer(subscription)
             return Response(serializer.data, status=status.HTTP_200_OK)
         except UserSubscription.DoesNotExist:
@@ -130,19 +150,24 @@ class UserSubscriptionView(APIView):
             }, status=status.HTTP_404_NOT_FOUND)
     
     def post(self, request):
-        data = request.data
+        plan_type = request.data.get('plan')
+        
+        if not plan_type:
+            return Response({
+                'error': 'Plan type is required'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            plan = Subscription.objects.get(subscription=data.get('plan'))
+            plan = Subscription.objects.get(subscription=plan_type.upper())
         except Subscription.DoesNotExist:
+            valid_plans = [choice[0] for choice in Subscription.SUBSCRIPTION_TYPE]
             return Response({
-                'error': 'Invalid subscription plan'
+                'error': f'Invalid subscription plan. Choose from: {", ".join(valid_plans)}'
             }, status=status.HTTP_400_BAD_REQUEST)
 
         user = request.user
-        activated_date = timezone.now().date()  # Ensuring this is a date object
+        activated_date = timezone.now().date()
         expires_date = activated_date + timedelta(days=plan.duration_days)
-        
         subscription, created = UserSubscription.objects.update_or_create(
             user=user,
             defaults={
@@ -159,15 +184,27 @@ class UserSubscriptionView(APIView):
         user.save()
 
         serializer = UserSubscriptionSerializer(subscription)
+        message = 'Subscription activated successfully' if created else 'Subscription renewed successfully'
+        
         return Response({
             'subscription': serializer.data,
-            'message': 'Subscription activated successfully' if created else 'Subscription updated successfully'
+            'message': message
         }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
     
     def delete(self, request):
-        """Cancel user subscription"""
         try:
             subscription = UserSubscription.objects.get(user=request.user)
+            from orders.models import Order
+            active_orders = Order.objects.filter(
+                user=request.user,
+                status__in=['PENDING', 'PROCESSING', 'DELIVERING']
+            ).exists()
+            
+            if active_orders:
+                return Response({
+                    'error': 'Cannot cancel subscription with active orders. Please wait for orders to complete.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+            
             subscription.is_active = False
             subscription.payment_status = 'UNPAID'
             subscription.save()
@@ -182,4 +219,5 @@ class UserSubscriptionView(APIView):
         except UserSubscription.DoesNotExist:
             return Response({
                 'error': 'No active subscription found'
-            }, status=status.HTTP_404_NOT_FOUND)
+            }, status=status.HTTP_404_NOT_FOUND
+        )

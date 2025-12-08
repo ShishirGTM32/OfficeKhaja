@@ -3,12 +3,14 @@ from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from khaja.models import Meals, CustomMeal, Nutrition, Combo, Ingredient, MealIngredient
 from users.models import CustomUser, UserSubscription
 from .serializers import (
     MealSerializer, CustomMealSerializer, NutritionSerializer, ComboSerializer,
     IngredientSerializer, MealIngredientSerializer
 )
+
 
 class IngredientView(APIView):
     permission_classes = [AllowAny]
@@ -20,7 +22,6 @@ class IngredientView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
 
         category = request.query_params.get('category', None)
-        
         queryset = Ingredient.objects.all()
         
         if category:
@@ -82,6 +83,7 @@ class MealListView(APIView):
                         {"error": "Some ingredient IDs are invalid"}, 
                         status=status.HTTP_400_BAD_REQUEST
                     )
+            
             meal = serializer.save()
             
             if ingredient_ids:
@@ -117,8 +119,9 @@ class MealDetailView(APIView):
                         {"error": "Some ingredient IDs are invalid"}, 
                         status=status.HTTP_400_BAD_REQUEST
                     )
+            
             meal = serializer.save()
-        
+            
             if ingredient_ids is not None:
                 meal_ingredient, created = MealIngredient.objects.get_or_create(meal=meal)
                 meal_ingredient.ingredient_ids = ingredient_ids
@@ -163,6 +166,7 @@ class MealIngredientsView(APIView):
                 {"error": "Some ingredient IDs are invalid"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
         meal_ingredient, created = MealIngredient.objects.get_or_create(meal=meal)
         meal_ingredient.ingredient_ids = ingredient_ids
         meal_ingredient.save()
@@ -230,35 +234,46 @@ class CustomMealListView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     def post(self, request):
+        try:
+            subscription = UserSubscription.objects.get(user=request.user)
+            if not subscription.is_active or subscription.expires_on < timezone.now().date():
+                return Response(
+                    {"error": "Your subscription has expired. Please renew to create custom meals."},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        except UserSubscription.DoesNotExist:
+            return Response(
+                {"error": "Please subscribe to a plan first"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
         serializer = CustomMealSerializer(
             data=request.data,
             context={'request': request}
         )
         
         if serializer.is_valid():
+            user = CustomUser.objects.get(id=request.user.id)
             meal_ids = serializer.validated_data.pop('meal_ids')
             meals = Meals.objects.filter(meal_id__in=meal_ids)
+            
             if meals.count() != len(meal_ids):
                 return Response(
                     {"error": "Some meal IDs are invalid"}, 
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Create combo
             combo = Combo.objects.create()
             combo.meals.set(meals)
             
-            try:
-                plans = UserSubscription.objects.get(user=request.user)
-            except UserSubscription.DoesNotExist:
-                return Response(
-                    {"error": "Please subscribe to a plan first"},
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            
+            # Create custom meal
             custom_meal = CustomMeal.objects.create(
                 user=request.user,
                 meals=combo,
-                **serializer.validated_data
+                delivery_address=str(user.street_address),
+                **serializer.validated_data,
+                subscription_plan=subscription
             )
             
             response_serializer = CustomMealSerializer(custom_meal)
@@ -271,29 +286,26 @@ class CustomMealDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, combo_id):
-        custom_meal = CustomMeal.objects.filter(combo_id=combo_id, user_id=request.user.id).first()
+        custom_meal = CustomMeal.objects.filter(
+            combo_id=combo_id, 
+            user=request.user
+        ).first()
+        
         if not custom_meal:
             return Response(
                 {"error": "Custom meal not found"},
                 status=status.HTTP_404_NOT_FOUND
             )
+        
         serializer = CustomMealSerializer(custom_meal)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, combo_id):
-        custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id, user_id=request.user.id)
-        
-        from orders.models import OrderItem
-        in_order = OrderItem.objects.filter(
-            custom_meal=custom_meal,
-            order__status__in=['PENDING', 'PROCESSING']
-        ).exists()
-        
-        if in_order:
-            return Response(
-                {"error": "Cannot modify custom meal that is in a pending or processing order"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        custom_meal = get_object_or_404(
+            CustomMeal, 
+            combo_id=combo_id, 
+            user=request.user
+        )
         
         serializer = CustomMealSerializer(
             custom_meal,
@@ -324,11 +336,15 @@ class CustomMealDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, combo_id):
-        custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id, user_id=request.user.id)
+        custom_meal = get_object_or_404(
+            CustomMeal, 
+            combo_id=combo_id, 
+            user=request.user
+        )
+        from orders.models import OrderItem, ComboOrderItem
         
-        from orders.models import OrderItem
-        in_order = OrderItem.objects.filter(
-            custom_meal=custom_meal,
+        in_order = ComboOrderItem.objects.filter(
+            combo=custom_meal,
             order__status__in=['PENDING', 'PROCESSING', 'DELIVERING']
         ).exists()
         
@@ -337,9 +353,10 @@ class CustomMealDetailView(APIView):
                 {"error": "Cannot delete custom meal that is in an active order"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
         custom_meal.is_active = False
         custom_meal.save()
-        return Response({"message": "Custom meal deleted"}, status=status.HTTP_204_NO_CONTENT)
-
-
+        
+        return Response(
+            {"message": "Custom meal deleted"}, 
+            status=status.HTTP_204_NO_CONTENT
+        )

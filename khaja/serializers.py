@@ -1,5 +1,7 @@
 # khaja/serializers.py
 from rest_framework import serializers
+from django.utils import timezone
+from datetime import datetime
 from .models import Meals, Nutrition, CustomMeal, Combo, Ingredient, MealIngredient
 
 
@@ -84,10 +86,7 @@ class CustomMealSerializer(serializers.ModelSerializer):
         source='get_delivery_time_slot_display',
         read_only=True
     )
-    time_slot_range = serializers.CharField(
-        source='get_time_slot_range',
-        read_only=True
-    )
+    time_slot_range = serializers.SerializerMethodField()
     formatted_delivery_time = serializers.CharField(
         source='get_formatted_delivery_time',
         read_only=True
@@ -105,20 +104,34 @@ class CustomMealSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ['combo_id', 'user', 'created_at', 'delivery_address']
 
+    def get_time_slot_range(self, obj):
+        if obj.delivery_time_slot:
+            start, end = CustomMeal.TIME_SLOT_RANGES.get(
+                obj.delivery_time_slot, 
+                ("00:00", "00:00")
+            )
+            return f"{start} - {end}"
+        return ""
+
+    def validate_delivery_time(self, value):
+        if value and value < timezone.now():
+            raise serializers.ValidationError(
+                "Delivery time cannot be in the past"
+            )
+        return value
+
     def validate(self, data):
-        """
-        Validate that selected meals match the custom meal's category and type
-        """
         meal_ids = data.get('meal_ids', [])
         category = data.get('category')
         meal_type = data.get('type')
+        delivery_time = data.get('delivery_time')
+        delivery_slot = data.get('delivery_time_slot')
         
         if not meal_ids:
             raise serializers.ValidationError({
                 'meal_ids': 'At least one meal must be selected'
             })
         
-        # Fetch the selected meals
         meals = Meals.objects.filter(meal_id__in=meal_ids)
         
         if meals.count() != len(meal_ids):
@@ -126,7 +139,6 @@ class CustomMealSerializer(serializers.ModelSerializer):
                 'meal_ids': 'Some meal IDs are invalid'
             })
         
-        # Validate category match
         if category:
             mismatched_category = meals.exclude(meal_category=category)
             if mismatched_category.exists():
@@ -149,6 +161,30 @@ class CustomMealSerializer(serializers.ModelSerializer):
                     'meal_ids': f'The following meals do not match the selected type '
                                f'({meal_type}): {mismatched_names}'
                 })
+        if delivery_time and delivery_slot:
+            time_only = delivery_time.time()
+            start_str, end_str = CustomMeal.TIME_SLOT_RANGES.get(
+                delivery_slot, 
+                ("00:00", "23:59")
+            )
+            
+            start_time = datetime.strptime(start_str, '%H:%M').time()
+            end_time = datetime.strptime(end_str, '%H:%M').time()
+            
+            if not (start_time <= time_only <= end_time):
+                raise serializers.ValidationError({
+                    'delivery_time': f'Delivery time must be between {start_str} and {end_str} '
+                                   f'for the selected time slot ({delivery_slot})'
+                })
+        if delivery_time and not delivery_slot:
+            raise serializers.ValidationError({
+                'delivery_time_slot': 'Delivery time slot is required when delivery time is provided'
+            })
+        
+        if delivery_slot and not delivery_time:
+            raise serializers.ValidationError({
+                'delivery_time': 'Delivery time is required when delivery time slot is provided'
+            })
         
         return data
 

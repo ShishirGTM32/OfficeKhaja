@@ -11,13 +11,25 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         model = CustomUser
         fields = [
             'phone_number', 'first_name', 'last_name', 'password', 
-            'confirm_password', 'user_type', 'no_of_peoples', 
-            'street_address', 'city', 'meal_preferences'
+            'confirm_password', 'user_type', 'no_of_peoples', 'payment_method'
         ]
+
+    def validate_phone_number(self, value):
+        if CustomUser.objects.filter(phone_number=value).exists():
+            raise serializers.ValidationError("Phone number already registered")
+        return value
+
+    def validate_payment_method(self, value):
+        valid_methods = [choice[0] for choice in CustomUser.PAYMENT_METHOD]
+        if value not in valid_methods:
+            raise serializers.ValidationError(
+                f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
+            )
+        return value
 
     def validate(self, data):
         if data['password'] != data['confirm_password']:
-            raise serializers.ValidationError("Passwords do not match")
+            raise serializers.ValidationError({"confirm_password": "Passwords do not match"})
         return data
 
     def create(self, validated_data):
@@ -47,20 +59,23 @@ class UserLoginSerializer(serializers.Serializer):
 class SubscriptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Subscription
-        fields = '__all__'
+        fields = ['sid', 'subscription', 'rate', 'duration_days']
+        read_only_fields = ['sid']
 
 
 class UserSubscriptionSerializer(serializers.ModelSerializer):
     plan_details = SubscriptionSerializer(source='plan', read_only=True)
+    days_remaining = serializers.IntegerField(read_only=True, source='days_remaining')
+    is_expired = serializers.BooleanField(read_only=True, source='is_expired')
     
     class Meta:
         model = UserSubscription
         fields = [
             'sub_id', 'plan', 'plan_details', 'activated_from', 
-            'expires_on', 'payment_status', 'is_active', 
+            'expires_on', 'is_active', 'days_remaining', 'is_expired',
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['sub_id', 'created_at', 'updated_at']
+        read_only_fields = ['sub_id', 'created_at', 'updated_at', 'expires_on']
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -72,4 +87,12 @@ class UserSerializer(serializers.ModelSerializer):
             'city', 'status', 'meal_preferences', 'is_active', 
             'created_at', 'updated_at'
         ]
-        read_only_fields = ['id', 'created_at', 'updated_at', 'status']
+        read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'phone_number']
+
+    def validate_payment_method(self, value):
+        valid_methods = [choice[0] for choice in CustomUser.PAYMENT_METHOD]
+        if value not in valid_methods:
+            raise serializers.ValidationError(
+                f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
+            )
+        return value
