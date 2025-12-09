@@ -1,4 +1,4 @@
-# users/models.py
+
 from django.db import models
 from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.core.validators import RegexValidator
@@ -45,6 +45,10 @@ class CustomUserManager(BaseUserManager):
 
         return self.create_user(phone_number, password, **extra_fields)
 
+email_regex = RegexValidator(
+    regex=r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$',
+    message="Enter a valid email address."
+)
 
 class CustomUser(AbstractBaseUser, PermissionsMixin):
     PAYMENT_METHOD = [
@@ -76,6 +80,13 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     )
     first_name = models.CharField(max_length=30)
     last_name = models.CharField(max_length=30)
+
+    email = models.EmailField(
+        max_length=254,
+        validators=[email_regex],
+        unique=True,
+    )
+
     image = models.ImageField(upload_to='profile/', null=True, blank=True)
     user_type = models.CharField(max_length=20, choices=USER_TYPE, default="INDIVIDUALS")
     no_of_peoples = models.IntegerField(default=1)

@@ -6,12 +6,18 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from datetime import timedelta
 from .models import CustomUser, UserSubscription, Subscription
+import random
+from django.core.mail import send_mail
+from django.conf import settings
 from .serializers import (
     SubscriptionSerializer, 
     UserSerializer, 
     UserLoginSerializer, 
     UserRegistrationSerializer, 
-    UserSubscriptionSerializer
+    UserSubscriptionSerializer,
+    ResetPasswordRequestSerializer,
+    OTPSerializer,
+    ResetPasswordSerializer
 )
 
 
@@ -28,10 +34,9 @@ class UserRegistrationView(generics.CreateAPIView):
     permission_classes = [AllowAny]
 
     def create(self, request):
-        serializer = self.get_serializer(data=request.data)
+        serializer = self.get_serializer(data=request.data, context = {"request":request})
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
-        
         tokens = get_tokens_for_user(user)
         
         return Response({
@@ -151,7 +156,6 @@ class UserSubscriptionView(APIView):
     
     def post(self, request):
         plan_type = request.data.get('plan')
-        
         if not plan_type:
             return Response({
                 'error': 'Plan type is required'
@@ -172,14 +176,11 @@ class UserSubscriptionView(APIView):
             user=user,
             defaults={
                 'plan': plan,
-                'payment_status': 'PAID',
                 'activated_from': activated_date,
                 'expires_on': expires_date,
                 'is_active': True
             }
         )
-
-        # Update user status
         user.status = "ACTIVE"
         user.save()
 
@@ -221,3 +222,91 @@ class UserSubscriptionView(APIView):
                 'error': 'No active subscription found'
             }, status=status.HTTP_404_NOT_FOUND
         )
+
+
+class ResetPasswordRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ResetPasswordRequestSerializer(data=request.data, context={"request":request})
+        serializer.is_valid(raise_exception=True)
+        return Response("OTP sent to your mail.", status=status.HTTP_200_OK)
+    
+
+class OTPVerificationView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = OTPSerializer(data=request.data, context={"request": request})
+        serializer.is_valid(raise_exception=True)
+        otp_type = serializer.validated_data['otp_type']
+        user_id = serializer.validated_data['user_id']
+
+        if otp_type == 'register' and user_id:
+            user = CustomUser.objects.get(id=user_id)
+            user.is_active = True
+            user.save()
+            request.session.pop('register_user_id', None)
+
+            return Response({"detail": "Registration confirmed. Account activated."}, status=status.HTTP_202_ACCEPTED)
+
+        elif otp_type == 'reset_password':
+            return Response({"detail": "OTP verified. You can now reset your password."}, status=status.HTTP_202_ACCEPTED)
+
+        return Response({"detail": "OTP verified."}, status=status.HTTP_202_ACCEPTED)
+
+
+class ResetPasswordView(APIView):
+    permission_classes = [AllowAny]
+    
+    def post(self, request):
+        serializer = ResetPasswordSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if request.session.get("otp_verified") is not True:
+            return Response({"detail": "OTP not verified."}, status=400)
+
+        user_id = request.session.get("reset_user_id")
+        user = CustomUser.objects.get(id=user_id)
+        user.set_password(serializer.validated_data["new_password"])
+        user.save()
+        request.session.pop("otp_verified", None)
+        request.session.pop("reset_user_id", None)
+
+        return Response({"detail": "Password reset successful."})
+
+class ResendOTPView(APIView):
+    permission_classes=[AllowAny]
+
+    def post(self, request):
+        otp_type = request.session['otp_type']
+
+        if otp_type == 'register':
+            user_id = request.session.get('register_user_id')
+        elif otp_type == 'reset_password':
+            user_id = request.session.get('reset_user_id')
+        else:
+            return Response({"error": "Invalid otp_type"}, status=400)
+
+        if not user_id:
+            return Response({"error": "No OTP session found. Please request a new OTP flow."}, status=400)
+
+        new_otp = str(random.randint(100000, 999999))
+        request.session['otp'] = new_otp
+        request.session['otp_created_at'] = timezone.now().isoformat()
+        request.session['otp_type'] = otp_type
+
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            return Response({"error": "User not found"}, status=404)
+        
+        send_mail(
+            'New OTP',
+            f'Your OTP code is {new_otp}.',
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+            fail_silently=False
+        )
+
+        return Response({"detail": f"{otp_type.capitalize()} OTP resent successfully"}, status=200)
