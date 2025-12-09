@@ -211,7 +211,6 @@ class OrderListView(APIView):
             for cart_item in cart_items:
                 if cart_item.custom_meal:
                     custom_meal = cart_item.custom_meal
-                    print(custom_meal)
                     subscription = UserSubscription.objects.get(user=request.user)
                     price_snapshot = custom_meal.get_total_price()
                     delivery_from = custom_meal.delivery_time.date()
