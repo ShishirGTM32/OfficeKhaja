@@ -5,12 +5,7 @@ from khaja.serializers import CustomMealSerializer, MealSerializer
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    custom_meal_details = CustomMealSerializer(source='custom_meal', read_only=True)
     meal_details = MealSerializer(source='meals', read_only=True)
-    formatted_delivery_time = serializers.CharField(
-        source='get_formatted_delivery_time',
-        read_only=True
-    )
     total_price = serializers.DecimalField(
         max_digits=10, 
         decimal_places=2, 
@@ -21,10 +16,9 @@ class OrderItemSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrderItem
         fields = [
-            'id', 'custom_meal', 'custom_meal_details', 'meals', 'meal_details',
-            'meal_type', 'meal_category', 'no_of_servings', 'preferences', 
-            'subscription_plan', 'delivery_time_slot', 'delivery_time', 
-            'formatted_delivery_time', 'price_per_serving', 'quantity', 
+            'id', 'meals', 'meal_details',
+            'meal_type', 'meal_category',
+            'quantity', 
             'meal_items_snapshot', 'total_price'
         ]
 
@@ -49,7 +43,7 @@ class ComboOrderItemSerializer(serializers.ModelSerializer):
             'delivery_from_date', 'delivery_to_date', 
             'delivery_time', 'formatted_delivery_time', 
             'quantity', 'preferences', 'price_snapshot', 
-            'combo_items_snapshot', 'total_price'
+            'total_price'
         ]
 
 
@@ -128,10 +122,10 @@ class CartItemSerializer(serializers.ModelSerializer):
         fields = [
             'id', 'custom_meal', 'custom_meal_id', 'custom_meal_details',
             'meals', 'meal_id', 'meal_details',
-            'quantity', 'is_combo',
+            'quantity', 
             'price_per_item', 'total_price', 'added_at'
         ]
-        read_only_fields = ['id', 'is_combo', 'added_at']
+        read_only_fields = ['id', 'added_at']
 
     def validate(self, data):
         custom_meal_id = data.get('custom_meal_id')
@@ -156,12 +150,10 @@ class CartItemSerializer(serializers.ModelSerializer):
         if custom_meal_id:
             custom_meal = CustomMeal.objects.get(combo_id=custom_meal_id)
             validated_data['custom_meal'] = custom_meal
-            validated_data['is_combo'] = True
 
         if meal_id:
             meal = Meals.objects.get(meal_id=meal_id)
             validated_data['meals'] = meal
-            validated_data['is_combo'] = False
 
         return super().create(validated_data)
 

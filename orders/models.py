@@ -69,49 +69,22 @@ class OrderItem(models.Model):
     }
     
     order = models.ForeignKey(Order, related_name='order_items', on_delete=models.CASCADE)
-    custom_meal = models.ForeignKey(CustomMeal, on_delete=models.SET_NULL, null=True, blank=True)
     meals = models.ForeignKey(Meals, on_delete=models.CASCADE, null=True, blank=True)
     meal_type = models.CharField(max_length=20)
     meal_category = models.CharField(max_length=50)
-    no_of_servings = models.PositiveIntegerField(default=1)
-    subscription_plan = models.CharField(max_length=20)
-    delivery_time_slot = models.CharField(max_length=50, choices=DELIVERY_TIME_SLOTS, null=True, blank=True)
-    delivery_time = models.DateTimeField(null=True, blank=True)
-    price_per_serving = models.DecimalField(max_digits=10, decimal_places=2, default=Decimal('0.00'))
     quantity = models.PositiveIntegerField(default=1)
     meal_items_snapshot = models.JSONField(default=dict)
 
     def get_price_per_item(self):
-        if self.custom_meal:
-            return self.custom_meal.get_total_price()
-        elif self.meals:
-            return self.meals.price * Decimal(self.no_of_servings)
-        return Decimal('0.00')
+        return self.meals.price
 
     def get_total_price(self):
         return self.get_price_per_item() * Decimal(self.quantity)
     
-    def get_time_slot_range(self):
-        if self.delivery_time_slot:
-            start, end = self.TIME_SLOT_RANGES.get(self.delivery_time_slot, ("", ""))
-            return f"{start} - {end}"
-        return ""
-    
-    def get_formatted_delivery_time(self):
-        if self.delivery_time:
-            date_str = self.delivery_time.strftime('%d %b %Y')
-            time_range = self.get_time_slot_range()
-            if time_range:
-                return f"{date_str}, ({time_range})"
-            return date_str
-        return ""
 
     def __str__(self):
-        if self.custom_meal:
-            return f"CustomMeal ({self.custom_meal.category}) x {self.quantity} for Order #{self.order.id}"
-        elif self.meals:
-            return f"{self.meals.name} x {self.quantity} for Order #{self.order.id}"
-        return f"Empty item for Order #{self.order.id}"
+        return f"{self.meals.name} x {self.quantity} for Order #{self.order.id}"
+
 
     class Meta:
         ordering = ['id']
@@ -140,7 +113,6 @@ class ComboOrderItem(models.Model):
     quantity = models.PositiveIntegerField(default=1)
     preferences = models.TextField(blank=True)
     price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
-    combo_items_snapshot = models.JSONField(default=dict)
     
     def get_total_price(self):
         return self.price_snapshot * Decimal(self.quantity)
@@ -191,28 +163,15 @@ class CartItem(models.Model):
     custom_meal = models.ForeignKey(CustomMeal, on_delete=models.CASCADE, null=True, blank=True)
     meals = models.ForeignKey(Meals, on_delete=models.CASCADE, null=True, blank=True)
     quantity = models.PositiveIntegerField(default=1)
-    is_combo = models.BooleanField(default=False, help_text="True for custom meals, False for regular meals")
     added_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ['-added_at']
-        constraints = [
-            models.UniqueConstraint(
-                fields=['cart', 'custom_meal'],
-                condition=models.Q(is_combo=True),
-                name='unique_cart_custom_meal'
-            ),
-            models.UniqueConstraint(
-                fields=['cart', 'meals'],
-                condition=models.Q(is_combo=False),
-                name='unique_cart_meal'
-            )
-        ]
 
     def get_price_per_item(self):
-        if self.is_combo and self.custom_meal:
+        if self.custom_meal:
             return self.custom_meal.get_total_price()
-        elif not self.is_combo and self.meals:
+        elif  self.meals:
             return self.meals.price
         return Decimal('0.00')
 
@@ -220,17 +179,9 @@ class CartItem(models.Model):
         return self.get_price_per_item() * self.quantity
 
     def __str__(self):
-        if self.is_combo and self.custom_meal:
+        if self.custom_meal:
             return f"Custom Meal ({self.custom_meal.category}) x {self.quantity}"
-        elif not self.is_combo and self.meals:
+        elif self.meals:
             return f"{self.meals.name} x {self.quantity}"
         return f"Empty cart item"
 
-    def clean(self):
-        from django.core.exceptions import ValidationError
-        if self.is_combo and not self.custom_meal:
-            raise ValidationError("Combo items must have a custom_meal")
-        if not self.is_combo and not self.meals:
-            raise ValidationError("Non-combo items must have a meal")
-        if self.custom_meal and self.meals:
-            raise ValidationError("Item cannot have both custom_meal and meals")
