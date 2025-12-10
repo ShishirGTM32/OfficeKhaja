@@ -6,6 +6,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from datetime import timedelta
 from .models import CustomUser, UserSubscription, Subscription
+from orders.permissions import IsStaff, IsSubscribedUser
 import random
 from django.core.mail import send_mail
 from django.conf import settings
@@ -86,20 +87,17 @@ class UserLogoutView(APIView):
 
 
 class UserProfileView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET', 'POST']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request):
         user = request.user
         serializer = UserSerializer(user)
-        response_data = serializer.data
-        
-        try:
-            subscription = UserSubscription.objects.get(user=user)
-            response_data['subscription'] = UserSubscriptionSerializer(subscription).data
-        except UserSubscription.DoesNotExist:
-            response_data['subscription'] = None
-            response_data['message'] = "No active subscription. Please subscribe to a plan."
-            
+        response_data = serializer.data            
         return Response(response_data, status=status.HTTP_200_OK)
 
     def put(self, request):
@@ -132,27 +130,26 @@ class SubscriptionListView(APIView):
 
 
 class UserSubscriptionView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET', 'POST', 'DELETE']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request):
-        try:
-            subscription = UserSubscription.objects.get(user=request.user)
-            
-            if subscription.expires_on < timezone.now().date():
-                subscription.is_active = False
-                subscription.payment_status = 'UNPAID'
-                subscription.save()
-                
-                user = request.user
-                user.status = 'EXPIRED'
-                user.save()
-            
-            serializer = UserSubscriptionSerializer(subscription)
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except UserSubscription.DoesNotExist:
-            return Response({
-                'message': 'No active subscription found. Please subscribe to a plan.'
-            }, status=status.HTTP_404_NOT_FOUND)
+
+        subscription = UserSubscription.objects.get(user=request.user)
+        
+        if subscription.expires_on < timezone.now().date():
+            subscription.is_active = False
+            subscription.save()
+            user = request.user
+            user.status = False
+            user.save()
+        
+        serializer = UserSubscriptionSerializer(subscription)
+        return Response(serializer.data, status=status.HTTP_200_OK)
     
     def post(self, request):
         plan_type = request.data.get('plan')
@@ -181,7 +178,7 @@ class UserSubscriptionView(APIView):
                 'is_active': True
             }
         )
-        user.status = "ACTIVE"
+        user.status = True
         user.save()
 
         serializer = UserSubscriptionSerializer(subscription)
@@ -207,11 +204,10 @@ class UserSubscriptionView(APIView):
                 }, status=status.HTTP_400_BAD_REQUEST)
             
             subscription.is_active = False
-            subscription.payment_status = 'UNPAID'
             subscription.save()
             
             user = request.user
-            user.status = 'EXPIRED'
+            user.status = False
             user.save()
             
             return Response({

@@ -57,12 +57,6 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
         ("CARD", "Card"),
     ]
 
-    SUBSCRIPTION_STATUS = [
-        ("NOT_STARTED", "Not Started"),
-        ("ACTIVE", "Active"),
-        ("EXPIRED", "Expired")
-    ]
-
     USER_TYPE = [
         ("INDIVIDUALS", "Individuals"),
         ("ORGANIZATIONS", "Organizations")
@@ -93,7 +87,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     payment_method = models.CharField(max_length=255, choices=PAYMENT_METHOD, default='ESEWA')
     street_address = models.CharField(max_length=255, null=True, blank=True)
     city = models.CharField(max_length=20, default="Kathmandu")
-    status = models.CharField(max_length=20, choices=SUBSCRIPTION_STATUS, default="NOT_STARTED")
+    status = models.BooleanField(default=False)
     meal_preferences = models.TextField(null=True, blank=True)
     
     is_active = models.BooleanField(default=True)
