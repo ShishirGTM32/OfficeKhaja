@@ -8,6 +8,7 @@ from .models import Meals, CustomMeal, Nutrition, Combo, Ingredient, MealIngredi
 from .pagination import MenuInfiniteScrollPagination
 from users.models import CustomUser, UserSubscription
 from orders.models import ComboOrderItem
+from orders.permissions import IsSubscribedUser, IsStaff
 from .serializers import (
     MealSerializer, CustomMealSerializer, NutritionSerializer, ComboSerializer,
     IngredientSerializer, MealIngredientSerializer
@@ -15,7 +16,12 @@ from .serializers import (
 
 
 class IngredientView(APIView):
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request, pk=None):
         if pk:
@@ -57,7 +63,12 @@ class IngredientView(APIView):
 
 
 class MealListView(APIView):
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request):
         category = request.query_params.get('category', None)
@@ -104,7 +115,12 @@ class MealListView(APIView):
 
 
 class MealDetailView(APIView):
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request, meal_id):
         meal = get_object_or_404(Meals, meal_id=meal_id)
@@ -138,18 +154,21 @@ class MealDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, meal_id):
-        if request.user.is_staff or request.user.is_superuser:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
-            meal.delete()
-            return Response(
-                {"message": "Meal deleted successfully"}, 
-                status=status.HTTP_204_NO_CONTENT
-            )
-        else:
-            return Response({"message":"Unauthorized access"}, status=status.HTTP_401_UNAUTHORIZED)
+        meal = get_object_or_404(Meals, meal_id=meal_id)
+        meal.delete()
+        return Response(
+            {"message": "Meal deleted successfully"}, 
+            status=status.HTTP_204_NO_CONTENT
+        )
+
 
 class MealIngredientsView(APIView):
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request, meal_id):
         meal = get_object_or_404(Meals, meal_id=meal_id)
@@ -183,7 +202,12 @@ class MealIngredientsView(APIView):
 
 
 class NutritionView(APIView):
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request, meal_id):
         meal = get_object_or_404(Meals, meal_id=meal_id)
@@ -233,7 +257,12 @@ class NutritionView(APIView):
 
 
 class CustomMealListView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET', 'POST']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request):
         custom_meals = CustomMeal.objects.filter(user=request.user, is_active=True)
@@ -243,19 +272,6 @@ class CustomMealListView(APIView):
         return paginator.get_paginated_response(serializer.data)
     
     def post(self, request):
-        try:
-            subscription = UserSubscription.objects.get(user=request.user)
-            if not subscription.is_active or subscription.expires_on < timezone.now().date():
-                return Response(
-                    {"error": "Your subscription has expired. Please renew to create custom meals."},
-                    status=status.HTTP_403_FORBIDDEN
-                )
-        except UserSubscription.DoesNotExist:
-            return Response(
-                {"error": "Please subscribe to a plan first"},
-                status=status.HTTP_403_FORBIDDEN
-            )
-
         serializer = CustomMealSerializer(
             data=request.data,
             context={'request': request}
@@ -274,13 +290,13 @@ class CustomMealListView(APIView):
             
             combo = Combo.objects.create()
             combo.meals.set(meals)
-
+            subscription = UserSubscription.objects.filter(user=request.user.id)
             custom_meal = CustomMeal.objects.create(
                 user=request.user,
                 meals=combo,
                 delivery_address=str(user.street_address),
                 **serializer.validated_data,
-                subscription_plan=subscription
+                subscription_plan=subscription.plan.subscription
             )
             
             response_serializer = CustomMealSerializer(custom_meal)
@@ -290,7 +306,12 @@ class CustomMealListView(APIView):
 
 
 class CustomMealDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET', 'PUT', 'DELETE']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request, combo_id):
         custom_meal = CustomMeal.objects.filter(
