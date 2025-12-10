@@ -123,7 +123,7 @@ class CustomMealSerializer(serializers.ModelSerializer):
     def validate(self, data):
         meal_ids = data.get('meal_ids', [])
         category = data.get('category')
-        meal_type = data.get('type')
+        meal_type = data.get('type')      
         delivery_time = data.get('delivery_time')
         delivery_slot = data.get('delivery_time_slot')
         
@@ -150,7 +150,6 @@ class CustomMealSerializer(serializers.ModelSerializer):
                                f'({category}): {mismatched_names}'
                 })
         
-        # Validate type match
         if meal_type and meal_type != 'BOTH':
             mismatched_type = meals.exclude(type=meal_type)
             if mismatched_type.exists():

@@ -4,8 +4,10 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from khaja.models import Meals, CustomMeal, Nutrition, Combo, Ingredient, MealIngredient
+from .models import Meals, CustomMeal, Nutrition, Combo, Ingredient, MealIngredient
+from .pagination import MenuInfiniteScrollPagination
 from users.models import CustomUser, UserSubscription
+from orders.models import ComboOrderItem
 from .serializers import (
     MealSerializer, CustomMealSerializer, NutritionSerializer, ComboSerializer,
     IngredientSerializer, MealIngredientSerializer
@@ -58,7 +60,7 @@ class MealListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        category = request.query_params.get('category', None)
+        category = request.query_params.get('   ', None)
         meal_type = request.query_params.get('type', None)
         
         queryset = Meals.objects.all()
@@ -68,8 +70,9 @@ class MealListView(APIView):
         if meal_type:
             if meal_type.upper() != 'BOTH':
                 queryset = queryset.filter(type=meal_type.upper())
-        
-        serializer = MealSerializer(queryset, many=True)
+        pagiantor = MenuInfiniteScrollPagination()
+        qs = pagiantor.paginate_queryset(queryset, request)
+        serializer = MealSerializer(qs, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     def post(self, request):
@@ -133,13 +136,15 @@ class MealDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
-        meal.delete()
-        return Response(
-            {"message": "Meal deleted successfully"}, 
-            status=status.HTTP_204_NO_CONTENT
-        )
-
+        if request.user.is_staff or request.user.is_superuser:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal.delete()
+            return Response(
+                {"message": "Meal deleted successfully"}, 
+                status=status.HTTP_204_NO_CONTENT
+            )
+        else:
+            return Response({"message":"Unauthorized access"}, status=status.HTTP_401_UNAUTHORIZED)
 
 class MealIngredientsView(APIView):
     permission_classes = [AllowAny]
@@ -230,7 +235,9 @@ class CustomMealListView(APIView):
 
     def get(self, request):
         custom_meals = CustomMeal.objects.filter(user=request.user, is_active=True)
-        serializer = CustomMealSerializer(custom_meals, many=True)
+        paginator = MenuInfiniteScrollPagination()
+        queryset = paginator.paginate_queryset(custom_meals, request=True)
+        serializer = CustomMealSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     def post(self, request):
@@ -263,11 +270,9 @@ class CustomMealListView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
-            # Create combo
             combo = Combo.objects.create()
             combo.meals.set(meals)
-            
-            # Create custom meal
+
             custom_meal = CustomMeal.objects.create(
                 user=request.user,
                 meals=combo,
@@ -290,7 +295,6 @@ class CustomMealDetailView(APIView):
             combo_id=combo_id, 
             user=request.user
         ).first()
-        
         if not custom_meal:
             return Response(
                 {"error": "Custom meal not found"},
@@ -341,10 +345,8 @@ class CustomMealDetailView(APIView):
             combo_id=combo_id, 
             user=request.user
         )
-        from orders.models import OrderItem, ComboOrderItem
-        
         in_order = ComboOrderItem.objects.filter(
-            combo=custom_meal,
+            combo_id=custom_meal.combo_id,
             order__status__in=['PENDING', 'PROCESSING', 'DELIVERING']
         ).exists()
         
@@ -353,8 +355,7 @@ class CustomMealDetailView(APIView):
                 {"error": "Cannot delete custom meal that is in an active order"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        custom_meal.is_active = False
-        custom_meal.save()
+        custom_meal.delete()
         
         return Response(
             {"message": "Custom meal deleted"}, 
