@@ -134,7 +134,6 @@ class OTPSerializer(serializers.Serializer):
 
         otp_type = data.get('otp_type')
         session_type = request.session.get('otp_type')
-        print(request.session.get('otp'))
 
         if session_type != otp_type:
             raise serializers.ValidationError("OTP type mismatch")

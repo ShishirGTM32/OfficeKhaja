@@ -63,12 +63,10 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     ]
 
     phone_number = models.CharField(
-        max_length=13,
-        unique=True,
+        max_length=13, unique=True,
         validators=[
             RegexValidator(
-                regex=r'^(?:\+977[- ]?)?(?:9[78]\d{8}|1\d{7})$',
-                message="Enter a valid Nepal phone number."
+                regex=r'^(?:\+977[- ]?)?(?:9[78]\d{8}|1\d{7})$',message="Enter a valid Nepal phone number."
             )
         ]
     )

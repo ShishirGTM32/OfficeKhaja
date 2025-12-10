@@ -30,12 +30,11 @@ def get_tokens_for_user(user):
     }
 
 
-class UserRegistrationView(generics.CreateAPIView):
-    serializer_class = UserRegistrationSerializer
+class UserRegistrationView(APIView):
     permission_classes = [AllowAny]
 
-    def create(self, request):
-        serializer = self.get_serializer(data=request.data, context = {"request":request})
+    def post(self, request):
+        serializer = UserRegistrationSerializer(data=request.data, context = {"request":request})
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
         tokens = get_tokens_for_user(user)
