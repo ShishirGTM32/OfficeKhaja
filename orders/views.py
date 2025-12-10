@@ -66,10 +66,7 @@ class CartListView(APIView):
                 ).first()
 
                 if existing_item:
-                    existing_item.quantity += quantity
-                    existing_item.save()
-                    serializer = CartItemSerializer(existing_item)
-                    return Response(serializer.data, status=status.HTTP_200_OK)
+                    return Response("No of servings already specified so quantity only 1 for combo items if placed.")
                 cart_item = CartItem.objects.create(
                     cart=cart,
                     custom_meal_id=custom_meal_id,
@@ -127,6 +124,7 @@ class CartListView(APIView):
                 {"message": "Cart cleared successfully"}, 
                 status=status.HTTP_204_NO_CONTENT
             )
+
 
 class CartItemDetailView(APIView):
     def get_permissions(self):
@@ -208,6 +206,8 @@ class OrderListView(APIView):
                     custom_meal = cart_item.custom_meal
                     subscription = UserSubscription.objects.get(user=request.user)
                     price_snapshot = custom_meal.get_total_price()
+                    if custom_meal.delivery_time < timezone.now():
+                        return Response("Delivery date is not present time, is in past. Re-Change the date and proceed to order.", status=status.HTTP_403_FORBIDDEN) 
                     delivery_from = custom_meal.delivery_time.date()
                     delivery_to = delivery_from + timedelta(days=subscription.plan.duration_days - 1)
 
@@ -232,7 +232,6 @@ class OrderListView(APIView):
                         meals=meal,
                         meal_type=meal.type,
                         meal_category=meal.meal_category,
-                        price_per_serving=meal.price,
                         quantity=cart_item.quantity
                     )
 
