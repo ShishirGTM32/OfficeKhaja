@@ -60,7 +60,7 @@ class MealListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        category = request.query_params.get('   ', None)
+        category = request.query_params.get('category', None)
         meal_type = request.query_params.get('type', None)
         
         queryset = Meals.objects.all()
@@ -70,10 +70,12 @@ class MealListView(APIView):
         if meal_type:
             if meal_type.upper() != 'BOTH':
                 queryset = queryset.filter(type=meal_type.upper())
-        pagiantor = MenuInfiniteScrollPagination()
-        qs = pagiantor.paginate_queryset(queryset, request)
-        serializer = MealSerializer(qs, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        
+        paginator = MenuInfiniteScrollPagination()
+        paginated_qs = paginator.paginate_queryset(queryset, request)
+        serializer = MealSerializer(paginated_qs, many=True)
+        
+        return paginator.get_paginated_response(serializer.data)
     
     def post(self, request):
         serializer = MealSerializer(data=request.data)
@@ -238,7 +240,7 @@ class CustomMealListView(APIView):
         paginator = MenuInfiniteScrollPagination()
         queryset = paginator.paginate_queryset(custom_meals, request=True)
         serializer = CustomMealSerializer(queryset, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        return paginator.get_paginated_response(serializer.data)
     
     def post(self, request):
         try:
