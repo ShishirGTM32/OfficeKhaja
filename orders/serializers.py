@@ -143,27 +143,3 @@ class CartItemSerializer(serializers.ModelSerializer):
         return super().create(validated_data)
 
 
-class CartSerializer(serializers.ModelSerializer):
-    cart_items = CartItemSerializer(many=True, read_only=True)
-    subtotal = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=2, 
-        read_only=True, 
-        source='get_subtotal'
-    )
-    total_price = serializers.DecimalField(
-        max_digits=10, 
-        decimal_places=2, 
-        read_only=True, 
-        source='get_total_price'
-    )
-    items_count = serializers.IntegerField(read_only=True, source='get_items_count')
-
-    class Meta:
-        model = Cart
-        fields = [
-            'id', 'user', 'cart_items',
-            'subtotal', 'total_price', 
-            'items_count', 'created_at', 'updated_at'
-        ]
-        read_only_fields = ['id', 'user', 'created_at', 'updated_at']

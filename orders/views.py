@@ -13,33 +13,13 @@ from .permissions import IsStaff, IsSubscribedUser
 from khaja.pagination import MenuInfiniteScrollPagination
 from orders.models import Order, Cart, CartItem, OrderItem, ComboOrderItem
 from .serializers import (
-    OrderSerializer, CartSerializer, CartItemSerializer, OrderCreateSerializer
+    OrderSerializer, CartItemSerializer, OrderCreateSerializer
 )
 
-
-class CartView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        cart, created = Cart.objects.get_or_create(user=request.user)
-        paginator = MenuInfiniteScrollPagination()
-        queryset = paginator.paginate_queryset(cart, request)
-        serializer = CartSerializer(queryset)
-        return paginator.get_paginated_response(serializer.data)
-
-    def delete(self, request):
-        cart = get_object_or_404(Cart, user=request.user)
-        cart.clear()
-        return Response(
-            {"message": "Cart cleared successfully"}, 
-            status=status.HTTP_204_NO_CONTENT
-        )
-
-
-class CartItemListView(APIView):
+class CartListView(APIView):
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST']:
-            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        if self.request.method in ['GET', 'POST', 'DELETE']:
+            permission_classes = [IsSubscribedUser]
         else:
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
@@ -130,12 +110,28 @@ class CartItemListView(APIView):
                 return Response({
                     "error": "Meal not found"
                 }, status=status.HTTP_404_NOT_FOUND)
-
+            
+    def delete(self, request):
+        pk = request.data.get('pk')
+        if pk:
+            cart_item = get_object_or_404(CartItem, pk=pk, cart__user=request.user)
+            cart_item.delete()
+            return Response(
+                {"message": "Item removed from cart"}, 
+                status=status.HTTP_204_NO_CONTENT
+            )
+        else:
+            cart = get_object_or_404(Cart, user=request.user)
+            cart.clear()
+            return Response(
+                {"message": "Cart cleared successfully"}, 
+                status=status.HTTP_204_NO_CONTENT
+            )
 
 class CartItemDetailView(APIView):
     def get_permissions(self):
-        if self.request.method in ['GET', 'PATCH', 'DELETE', 'PUT', 'POST']:
-            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        if self.request.method in ['GET', 'DELETE']:
+            permission_classes = [IsSubscribedUser]
         else:
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
@@ -145,22 +141,6 @@ class CartItemDetailView(APIView):
 
     def get(self, request, pk):
         cart_item = self.get_object(pk, request.user)
-        serializer = CartItemSerializer(cart_item)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-    def patch(self, request, pk):
-        cart_item = self.get_object(pk, request.user)
-        quantity = request.data.get('quantity')
-
-        if quantity:
-            if int(quantity) <= 0:
-                return Response(
-                    {"error": "Quantity must be greater than 0"}, 
-                    status=status.HTTP_400_BAD_REQUEST
-                )
-            cart_item.quantity = int(quantity)
-            cart_item.save()
-
         serializer = CartItemSerializer(cart_item)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -176,7 +156,7 @@ class CartItemDetailView(APIView):
 class OrderListView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET', 'POST']:
-            permission_classes = [IsAuthenticated, IsSubscribedUser]
+            permission_classes = [IsSubscribedUser]
         else:
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
@@ -300,7 +280,7 @@ class OrderDetailView(APIView):
 
 class OrderCancelView(APIView):
     def get_permissions(self):
-        if self.request.method in ['GET']:
+        if self.request.method in ['POST']:
             permission_classes = [IsAuthenticated, IsSubscribedUser]
         else:
             permission_classes = [IsStaff]

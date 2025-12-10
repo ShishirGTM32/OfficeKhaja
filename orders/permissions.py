@@ -7,7 +7,7 @@ class IsSubscribedUser(permissions.BasePermission):
             if request.user.status:
                 return True
             else:
-                raise PermissionDenied(detail="Please subscribe to the plan before adding to cart")
+                raise PermissionDenied(detail="Please subscribe or renew your subscription plan before adding to cart")
         return False
 
 class IsStaff(permissions.BasePermission):
