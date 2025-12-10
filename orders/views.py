@@ -9,6 +9,8 @@ from users.models import UserSubscription, CustomUser
 from decimal import Decimal
 from django.db import transaction
 from datetime import  timedelta
+from .permissions import IsStaff, IsSubscribedUser
+from khaja.pagination import MenuInfiniteScrollPagination
 from orders.models import Order, Cart, CartItem, OrderItem, ComboOrderItem
 from .serializers import (
     OrderSerializer, CartSerializer, CartItemSerializer, OrderCreateSerializer
@@ -20,8 +22,10 @@ class CartView(APIView):
 
     def get(self, request):
         cart, created = Cart.objects.get_or_create(user=request.user)
-        serializer = CartSerializer(cart)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        paginator = MenuInfiniteScrollPagination()
+        queryset = paginator.paginate_queryset(cart, request)
+        serializer = CartSerializer(queryset)
+        return paginator.get_paginated_response(serializer.data)
 
     def delete(self, request):
         cart = get_object_or_404(Cart, user=request.user)
@@ -33,25 +37,22 @@ class CartView(APIView):
 
 
 class CartItemListView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET', 'POST']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request):
         cart, created = Cart.objects.get_or_create(user=request.user)
         cart_items = cart.cart_items.all()
-        serializer = CartItemSerializer(cart_items, many=True)
-        return Response({'cart_items': serializer.data}, status=status.HTTP_200_OK)
+        paginator = MenuInfiniteScrollPagination()
+        queryset = paginator.paginate_queryset(cart_items, request)
+        serializer = CartItemSerializer(queryset, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
-        try:
-            subscription = UserSubscription.objects.get(user=request.user)
-            if not subscription.is_active or subscription.expires_on < timezone.now().date():
-                return Response({
-                    "error": "Your subscription has expired. Please renew to continue."
-                }, status=status.HTTP_403_FORBIDDEN)
-        except UserSubscription.DoesNotExist:
-            return Response({
-                "error": "Please subscribe to a plan first"
-            }, status=status.HTTP_403_FORBIDDEN)
 
         cart, created = Cart.objects.get_or_create(user=request.user)
 
@@ -70,6 +71,9 @@ class CartItemListView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if custom_meal_id:
+            custom_meal = CustomMeal.objects.get(combo_id=custom_meal_id)
+            if custom_meal.delivery_time < timezone.now():
+                return Response("delivery time cannot be in past. Please change the delivery time of the custom meal you created.", status=status.HTTP_400_BAD_REQUEST)
             try:
                 custom_meal = CustomMeal.objects.get(
                     combo_id=custom_meal_id, 
@@ -78,7 +82,7 @@ class CartItemListView(APIView):
                 )
                 existing_item = CartItem.objects.filter(
                     cart=cart,
-                    custom_meal_id=custom_meal,
+                    custom_meal_id=custom_meal_id,
                 ).first()
 
                 if existing_item:
@@ -88,7 +92,7 @@ class CartItemListView(APIView):
                     return Response(serializer.data, status=status.HTTP_200_OK)
                 cart_item = CartItem.objects.create(
                     cart=cart,
-                    custom_meal_id=custom_meal,
+                    custom_meal_id=custom_meal_id,
                     quantity=quantity,
                 )
                 serializer = CartItemSerializer(cart_item)
@@ -129,7 +133,12 @@ class CartItemListView(APIView):
 
 
 class CartItemDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET', 'PATCH', 'DELETE', 'PUT', 'POST']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get_object(self, pk, user):
         return get_object_or_404(CartItem, pk=pk, cart__user=user)
@@ -165,7 +174,12 @@ class CartItemDetailView(APIView):
 
 
 class OrderListView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET', 'POST']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request):
         status_filter = request.query_params.get('status', None)
@@ -173,9 +187,10 @@ class OrderListView(APIView):
 
         if status_filter:
             orders = orders.filter(status=status_filter.upper())
-
-        serializer = OrderSerializer(orders, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        paginator = MenuInfiniteScrollPagination()
+        queryset = paginator.paginate_queryset(orders, request)
+        serializer = OrderSerializer(queryset, many=True)
+        return paginator.get_paginated_response(serializer.data)
 
     def post(self, request):
         serializer = OrderCreateSerializer(data=request.data, context={'request': request})
@@ -230,29 +245,6 @@ class OrderListView(APIView):
 
                 elif cart_item.meals:
                     meal = cart_item.meals
-                    
-                    meal_items_snapshot = [{
-                        'meal_id': meal.meal_id,
-                        'name': meal.name,
-                        'type': meal.type,
-                        'price': str(meal.price),
-                        'weight': meal.weight
-                    }]
-                    
-                    if hasattr(meal, 'meal_ingredients'):
-                        ingredients = meal.meal_ingredients.get_ingredients()
-                        meal_items_snapshot[0]['ingredients'] = [
-                            {'id': ing.id, 'name': ing.name, 'category': ing.category} 
-                            for ing in ingredients
-                        ]
-                    
-                    if hasattr(meal, 'nutrition'):
-                        meal_items_snapshot[0]['nutrition'] = {
-                            'energy': str(meal.nutrition.energy),
-                            'protein': str(meal.nutrition.protein),
-                            'carbs': str(meal.nutrition.carbs),
-                            'fats': str(meal.nutrition.fats),
-                        }
 
 
                     OrderItem.objects.create(
@@ -261,8 +253,7 @@ class OrderListView(APIView):
                         meal_type=meal.type,
                         meal_category=meal.meal_category,
                         price_per_serving=meal.price,
-                        quantity=cart_item.quantity,
-                        meal_items_snapshot=meal_items_snapshot
+                        quantity=cart_item.quantity
                     )
 
             order.calculate_pricing()
@@ -271,10 +262,25 @@ class OrderListView(APIView):
 
             order_serializer = OrderSerializer(order, context={'request': request})
             return Response(order_serializer.data, status=status.HTTP_201_CREATED)
+        
+    def patch(self, request):
+        pk = request.data.get("order_id")
+        data = request.data
+        order = get_object_or_404(Order, pk=pk)
+        serializer = OrderSerializer(order, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class OrderDetailView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
+    
 
     def get_object(self, pk, user):
         return get_object_or_404(Order, pk=pk, user=user)
@@ -283,36 +289,22 @@ class OrderDetailView(APIView):
         order = self.get_object(pk, request.user)
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
+    
     def patch(self, request, pk):
-        order = self.get_object(pk, request.user)
-
-        if 'status' in request.data:
-            new_status = request.data['status']
-
-            if new_status == 'CANCELLED':
-                if order.status in ['PENDING', 'PROCESSING']:
-                    order.status = 'CANCELLED'
-                    order.save()
-                    serializer = OrderSerializer(order)
-                    return Response(serializer.data, status=status.HTTP_200_OK)
-                else:
-                    return Response(
-                        {"error": "Cannot cancel order in current status"}, 
-                        status=status.HTTP_400_BAD_REQUEST
-                    )
-            else:
-                return Response(
-                    {"error": "Only cancellation is allowed for users"}, 
-                    status=status.HTTP_403_FORBIDDEN
-                )
-
-        serializer = OrderSerializer(order)
+        data = request.data
+        order = get_object_or_404(Order, pk=pk)
+        serializer = OrderSerializer(order, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
 class OrderCancelView(APIView):
-    permission_classes = [IsAuthenticated]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def post(self, request, pk):
         order = get_object_or_404(Order, pk=pk, user=request.user)

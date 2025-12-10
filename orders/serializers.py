@@ -2,6 +2,7 @@ from rest_framework import serializers
 from orders.models import Order, OrderItem, ComboOrderItem, Cart, CartItem
 from khaja.models import CustomMeal, Meals
 from khaja.serializers import CustomMealSerializer, MealSerializer
+from django.utils import timezone
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
@@ -19,7 +20,7 @@ class OrderItemSerializer(serializers.ModelSerializer):
             'id', 'meals', 'meal_details',
             'meal_type', 'meal_category',
             'quantity', 
-            'meal_items_snapshot', 'total_price'
+            'total_price'
         ]
 
 
@@ -77,27 +78,11 @@ class OrderCreateSerializer(serializers.Serializer):
         help_text="List of cart item IDs to order (if empty, orders all items)"
     )
     
-    delivery_time_slot = serializers.ChoiceField(
-        choices=OrderItem.DELIVERY_TIME_SLOTS,
-        required=False,
-        help_text="Delivery time slot for regular meals"
-    )
-    delivery_time = serializers.DateTimeField(
-        required=False,
-        help_text="Specific delivery date and time for regular meals"
-    )
     preferences = serializers.CharField(
         required=False, 
         allow_blank=True,
         help_text="Delivery preferences"
     )
-    
-    def validate_delivery_time(self, value):
-        from django.utils import timezone
-        if value and value < timezone.now():
-            raise serializers.ValidationError("Delivery time cannot be in the past")
-        return value
-
 
 class CartItemSerializer(serializers.ModelSerializer):
     custom_meal_details = CustomMealSerializer(source='custom_meal', read_only=True)
@@ -130,11 +115,11 @@ class CartItemSerializer(serializers.ModelSerializer):
     def validate(self, data):
         custom_meal_id = data.get('custom_meal_id')
         meal_id = data.get('meal_id')
-        
         if not custom_meal_id and not meal_id:
             raise serializers.ValidationError(
                 "Either custom_meal_id or meal_id must be provided"
             )
+        
         
         if custom_meal_id and meal_id:
             raise serializers.ValidationError(
@@ -178,7 +163,7 @@ class CartSerializer(serializers.ModelSerializer):
         model = Cart
         fields = [
             'id', 'user', 'cart_items',
-            'subtotal', 'tax', 'delivery_charge', 'total_price', 
+            'subtotal', 'total_price', 
             'items_count', 'created_at', 'updated_at'
         ]
         read_only_fields = ['id', 'user', 'created_at', 'updated_at']

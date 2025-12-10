@@ -73,7 +73,6 @@ class OrderItem(models.Model):
     meal_type = models.CharField(max_length=20)
     meal_category = models.CharField(max_length=50)
     quantity = models.PositiveIntegerField(default=1)
-    meal_items_snapshot = models.JSONField(default=dict)
 
     def get_price_per_item(self):
         return self.meals.price
