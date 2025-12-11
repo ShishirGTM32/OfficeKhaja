@@ -27,7 +27,7 @@ class Meals(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2)
     image = models.ImageField(upload_to='meals/', null=True, blank=True)
     weight = models.IntegerField(default=0, help_text="Weight in grams")
-    
+    is_available = models.BooleanField(default=True, help_text="Is this meal available for ordering?")
     def __str__(self):
         return f"{self.name} - {self.meal_category}"
 

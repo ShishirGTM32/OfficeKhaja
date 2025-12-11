@@ -23,7 +23,9 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/khaja/', include('khaja.urls')),
     path('api/orders/', include('orders.urls')),
-    path('api/auth/', include('users.urls'))
+    path('api/auth/', include('users.urls')),
+    path('api/admin/', include('orders.admin_urls')),
+    path('api/staff/', include('orders.staff_urls')),
 ]
 
 if settings.DEBUG:
