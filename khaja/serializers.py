@@ -54,7 +54,7 @@ class MealSerializer(serializers.ModelSerializer):
         if hasattr(obj, 'meal_ingredients'):
             ingredients = obj.meal_ingredients.get_ingredients()
             return IngredientSerializer(ingredients, many=True).data
-        return []
+        return []   
 
 
 class ComboSerializer(serializers.ModelSerializer):
