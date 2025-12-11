@@ -47,7 +47,8 @@ INSTALLED_APPS = [
     'rest_framework_simplejwt.token_blacklist',
     'khaja',
     'orders',
-    'users'
+    'users',
+    'blog'
     
 ]
 
