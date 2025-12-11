@@ -1,7 +1,7 @@
 from django.urls import path
 from .staff_views import (
     StaffOrderListView, StaffOrderDetailView,
-    StaffOrderStatusUpdateView, StaffComboOrderItemListView,
+     StaffComboOrderItemListView,
     StaffComboOrderItemDetailView, StaffSendDeliveryReminderView,
     StaffMealAvailabilityView, StaffDeliveryScheduleView
 )
@@ -9,7 +9,6 @@ from .staff_views import (
 urlpatterns = [
     path('orders/', StaffOrderListView.as_view(), name='staff-orders'),
     path('orders/<int:order_id>/', StaffOrderDetailView.as_view(), name='staff-order-detail'),
-    path('orders/<int:order_id>/status/', StaffOrderStatusUpdateView.as_view(), name='staff-order-status'),
     
     path('combo-orders/', StaffComboOrderItemListView.as_view(), name='staff-combo-orders'),
     path('combo-orders/<int:item_id>/', StaffComboOrderItemDetailView.as_view(), name='staff-combo-order-detail'),

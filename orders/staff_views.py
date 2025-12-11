@@ -7,10 +7,10 @@ from django.shortcuts import get_object_or_404
 from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
-from django.template.loader import render_to_string
 from orders.permissions import IsStaff
-from orders.models import Order, OrderItem, ComboOrderItem
+from orders.models import Order, ComboOrderItem
 from khaja.models import Meals
+from users.models import CustomUser
 from orders.serializers import OrderSerializer, ComboOrderItemSerializer
 from khaja.serializers import MealSerializer
 from khaja.pagination import MenuInfiniteScrollPagination
@@ -22,7 +22,6 @@ class StaffOrderListView(APIView):
     def get(self, request):
         orders = Order.objects.exclude(status='CANCELLED').order_by('-created_at')
         
-        # Filters
         status_filter = request.query_params.get('status')
         today = request.query_params.get('today')
         
@@ -45,10 +44,6 @@ class StaffOrderDetailView(APIView):
         order = get_object_or_404(Order, id=order_id)
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-class StaffOrderStatusUpdateView(APIView):
-    permission_classes = [IsAuthenticated, IsStaff]
 
     def patch(self, request, order_id):
         order = get_object_or_404(Order, id=order_id)
@@ -97,7 +92,8 @@ class StaffOrderStatusUpdateView(APIView):
 
     def send_status_update_email(self, order, old_status, new_status):
         user = order.user
-        
+        user = CustomUser.objects.get(phone_number=user.phone_number)
+        print(user)
         status_messages = {
             'PROCESSING': 'Your order is being prepared.',
             'DELIVERING': 'Your order is out for delivery!',
@@ -106,30 +102,29 @@ class StaffOrderStatusUpdateView(APIView):
         
         subject = f'Order #{order.id} Status Update - {new_status}'
         message = f"""
-Dear {user.first_name} {user.last_name},
+            Dear {user.first_name} {user.last_name},
 
-Your order #{order.id} status has been updated:
-Previous Status: {old_status}
-Current Status: {new_status}
+            Your order #{order.id} status has been updated:
+            Previous Status: {old_status}
+            Current Status: {new_status}
 
-{status_messages.get(new_status, '')}
+            {status_messages.get(new_status, '')}
 
-Order Details:
-- Total Amount: Rs. {order.total_price}
-- Delivery Address: {order.delivery_address}
+            Order Details:
+            - Total Amount: Rs. {order.total_price}
+            - Delivery Address: {order.delivery_address}
 
-Thank you for choosing our service!
+            Thank you for choosing our service!
 
-Best regards,
-Khaja Team
+            Best regards,
+            Khaja Team
         """
-        
+                    
         send_mail(
             subject,
             message,
             settings.DEFAULT_FROM_EMAIL,
             [user.email],
-            fail_silently=False
         )
 
 
