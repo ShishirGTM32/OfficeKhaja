@@ -6,7 +6,7 @@ from django.shortcuts import get_object_or_404
 from orders.permissions import IsAdminOrReadOnly
 from django.utils import timezone
 from datetime import timedelta
-from django.db.models import Count, F
+from django.db.models import Count, F, Q
 from khaja.pagination import MenuInfiniteScrollPagination
 from .models import Blog, Comments, HashTags, PostReaction
 from .serializers import BlogSerializer, CommentSerializer, PostReactionSerializer
@@ -38,8 +38,8 @@ class BlogView(APIView):
 
         remaining_blogs = blogs.exclude(blog_id__in=latest_posts.values_list('blog_id', flat=True))
         remaining_blogs = remaining_blogs.annotate(
-            likes_total=Count('likes'),
-            dislikes_total=Count('dislikes'),
+            likes_total=Count('postreaction', filter=Q(postreaction__reaction='like')),
+            dislikes_total=Count('postreaction', filter=Q(postreaction__reaction='dislike')),
             ratio=(F('likes_total') + 1.0) / (F('dislikes_total') + 1.0)
         ).order_by('-ratio')
 

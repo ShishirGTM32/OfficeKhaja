@@ -69,10 +69,10 @@ class BlogSerializer(serializers.ModelSerializer):
         read_only_fields = ['blog_id', 'created_at', 'likes', 'dislikes', 'user', 'slug', 'metadata']
 
     def get_likes(self, obj):
-        return getattr(obj, 'likes_total', obj.like_count)
+        return obj.like_count
 
     def get_dislikes(self, obj):
-        return getattr(obj, 'dislikes_total', obj.dislike_count)
+        return obj.dislike_count    
 
     def extract_hashtags(self, description):
         if not isinstance(description, str):
