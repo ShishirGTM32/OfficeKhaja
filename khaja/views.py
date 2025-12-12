@@ -9,6 +9,7 @@ from .pagination import MenuInfiniteScrollPagination
 from users.models import CustomUser, UserSubscription
 from orders.models import ComboOrderItem
 from orders.permissions import IsSubscribedUser, IsStaff
+from django.http import Http404
 from .serializers import (
     MealSerializer, CustomMealSerializer, NutritionSerializer, ComboSerializer,
     IngredientSerializer, MealIngredientSerializer
@@ -25,7 +26,10 @@ class IngredientView(APIView):
 
     def get(self, request, pk=None):
         if pk:
-            ingredient = get_object_or_404(Ingredient, pk=pk)
+            try:
+                ingredient = get_object_or_404(Ingredient, pk=pk)
+            except Http404:
+                return Response("invalid ingredient id", status=status.HTTP_404_NOT_FOUND)
             serializer = IngredientSerializer(ingredient)
             return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -46,7 +50,10 @@ class IngredientView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def put(self, request, pk):
-        ingredient = get_object_or_404(Ingredient, pk=pk)
+        try:
+            ingredient = get_object_or_404(Ingredient, pk=pk)
+        except Http404:
+            return Response("Invalid Ingredient", status=status.HTTP_404_NOT_FOUND)
         serializer = IngredientSerializer(ingredient, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -54,7 +61,10 @@ class IngredientView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, pk):
-        ingredient = get_object_or_404(Ingredient, pk=pk)
+        try:
+            ingredient = get_object_or_404(Ingredient, pk=pk)
+        except Http404:
+            return Response("Invalid Ingredient", status=status.HTTP_404_NOT_FOUND)
         ingredient.delete()
         return Response(
             {"message": "Ingredient deleted successfully"}, 
@@ -123,12 +133,18 @@ class MealDetailView(APIView):
         return [permission() for permission in permission_classes]
 
     def get(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         serializer = MealSerializer(meal)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         serializer = MealSerializer(meal, data=request.data, partial=True)
         
         if serializer.is_valid():
@@ -154,7 +170,10 @@ class MealDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         meal.delete()
         return Response(
             {"message": "Meal deleted successfully"}, 
@@ -171,7 +190,10 @@ class MealIngredientsView(APIView):
         return [permission() for permission in permission_classes]
 
     def get(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found",status=status.HTTP_404_NOT_FOUND)
         
         if hasattr(meal, 'meal_ingredients'):
             serializer = MealIngredientSerializer(meal.meal_ingredients)
@@ -183,7 +205,10 @@ class MealIngredientsView(APIView):
         )
 
     def post(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         ingredient_ids = request.data.get('ingredient_ids', [])
         
         ingredients = Ingredient.objects.filter(id__in=ingredient_ids)
@@ -210,7 +235,10 @@ class NutritionView(APIView):
         return [permission() for permission in permission_classes]
 
     def get(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         
         if hasattr(meal, 'nutrition'):
             serializer = NutritionSerializer(meal.nutrition)
@@ -222,7 +250,10 @@ class NutritionView(APIView):
         )
     
     def post(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         
         if hasattr(meal, 'nutrition'):
             return Response(
@@ -237,7 +268,10 @@ class NutritionView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
     def put(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         
         if not hasattr(meal, 'nutrition'):
             return Response(
@@ -328,12 +362,14 @@ class CustomMealDetailView(APIView):
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, combo_id):
-        custom_meal = get_object_or_404(
-            CustomMeal, 
-            combo_id=combo_id, 
-            user=request.user
-        )
-        
+        try:
+            custom_meal = get_object_or_404(
+                CustomMeal, 
+                combo_id=combo_id, 
+                user=request.user
+            )
+        except Http404:
+            return Response("Custom Meal not found", status=status.HTTP_404_NOT_FOUND)
         serializer = CustomMealSerializer(
             custom_meal,
             data=request.data,
@@ -363,11 +399,14 @@ class CustomMealDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, combo_id):
-        custom_meal = get_object_or_404(
-            CustomMeal, 
-            combo_id=combo_id, 
-            user=request.user
-        )
+        try:
+            custom_meal = get_object_or_404(
+                CustomMeal, 
+                combo_id=combo_id, 
+                user=request.user
+            )
+        except Http404:
+            return Response("Custom Meal not found", status=status.HTTP_404_NOT_FOUND)
         in_order = ComboOrderItem.objects.filter(
             combo_id=custom_meal.combo_id,
             order__status__in=['PENDING', 'PROCESSING', 'DELIVERING']

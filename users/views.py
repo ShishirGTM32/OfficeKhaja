@@ -211,7 +211,7 @@ class UserSubscriptionView(APIView):
             
             return Response({
                 'message': 'Subscription cancelled successfully'
-            }, status=status.HTTP_200_OK)
+            }, status=status.HTTP_204_NO_CONTENT)
         except UserSubscription.DoesNotExist:
             return Response({
                 'error': 'No active subscription found'

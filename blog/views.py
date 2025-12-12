@@ -2,13 +2,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from django.shortcuts import get_object_or_404
 from orders.permissions import IsAdminOrReadOnly
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Count, F, Q
 from khaja.pagination import MenuInfiniteScrollPagination
-from .models import Blog, Comments, HashTags, PostReaction
+from .models import Blog, Comments, HashTags
 from .serializers import BlogSerializer, CommentSerializer, PostReactionSerializer
 
 
@@ -72,28 +71,36 @@ class BlogDetailView(APIView):
         return [permission() for permission in permission_classes]
 
     def get(self, request, slug):
-        blog = get_object_or_404(Blog, slug=slug)
+        blog = Blog.objects.filter(slug=slug).first()
+        if not blog:
+            return Response(f"Blog not found with slug {slug}")
         serializer = BlogSerializer(blog)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, slug):
-        blog = get_object_or_404(Blog, slug=slug, user=request.user)
+        blog = Blog.objects.filter(slug=slug, user=request.user).first()
+        if not blog:
+            return Response(f"Not authorized for the operation to be performed.")
         serializer = BlogSerializer(blog, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
 
     def delete(self, request, slug):
-        blog = get_object_or_404(Blog, slug=slug, user=request.user)
+        blog = Blog.objects.filter(slug=slug, user=request.user).first()
+        if not blog:
+            return Response(f"Not authorized for the operation to be performed.")
         blog.delete()
-        return Response("Blog successfully deleted", status=status.HTTP_200_OK)
+        return Response("Blog successfully deleted", status=status.HTTP_204_NO_CONTENT)
 
 
 class CommentView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, slug):
-        blog = get_object_or_404(Blog, slug=slug)
+        blog = Blog.objects.filter(slug=slug).first()
+        if not blog:
+            return Response(f"Blog not found with slug {slug}")
         comments = Comments.objects.filter(blog=blog, parent=None)
 
         user_comment = next((c for c in comments if c.user == request.user), None)
@@ -108,7 +115,9 @@ class CommentView(APIView):
 
 
     def post(self, request, slug):
-        blog = get_object_or_404(Blog, slug=slug)
+        blog = Blog.objects.filter(slug=slug).first()
+        if not blog:
+            return Response(f"Blog not found with slug {slug}")
         parent_id = request.data.get('parent') 
         serializer = CommentSerializer(
             data=request.data,
@@ -123,7 +132,7 @@ class CommentView(APIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def put(self, request,slug, cid):
-        comment = get_object_or_404(Comments, comment_id = cid, user=request.user)
+        comment = Comments.objects.filter(comment_id=cid, user=request.user).first()
         if not comment:
             return Response("You are not authorized to edit this", status=status.HTTP_400_BAD_REQUEST)
         serializer = CommentSerializer(comment, data=request.data, partial=True)
@@ -131,33 +140,31 @@ class CommentView(APIView):
         serializer.save()   
         return Response(serializer.data, status=status.HTTP_202_ACCEPTED)
     
-    def delete(self, request, id, cid):
-        comment = get_object_or_404(Comments, comment_id = cid, user=request.user)
+    def delete(self, request, slug, cid):
+        comment = Comments.objects.filter(comment_id=cid, user=request.user).first()
         if not comment:
             return Response("You are not authorized to edit this", status=status.HTTP_400_BAD_REQUEST)
         
         comment.delete()
-        return Response("Comment Successfully deleted", status=status.HTTP_200_OK)
+        return Response("Comment Successfully deleted", status=status.HTTP_204_NO_CONTENT)
 
 class PostReactionView(APIView):
     permission_classes=[IsAuthenticated]
 
     def post(self, request, slug, reaction, cid=None):
         if slug:
-            blog_id = get_object_or_404(Blog, slug=slug)
+            blog_id = Blog.objects.filter(slug=slug, user=request.user).first()
+            if not blog_id:
+                return Response(f"Blog not found with slud {slug}")
             comment_id=None
         if cid:
-            comment_id = get_object_or_404(Comments, comment_id=cid)
-            print(comment_id)
+            comment_id = Comments.objects.filter(comment_id=cid, user=request.user).first()
+            if not comment_id:
+                return Response(f"Comment not found with id {cid}")
             blog_id=None
 
         seiralizer = PostReactionSerializer(data=request.data,
-                                            context={
-                                                'request':request,
-                                                'blog_id':blog_id,
-                                                'comment':comment_id,
-                                                'reaction':reaction
-                                            })
+                                            context={'request':request,'blog_id':blog_id,'comment':comment_id,'reaction':reaction})
         seiralizer.is_valid(raise_exception=True)
         rea = seiralizer.save()
 
@@ -189,6 +196,7 @@ class TrendingHashtagsView(APIView):
         ]
 
         return Response(data)
+
 
 class SlugView(APIView):
     permission_classes = [AllowAny]

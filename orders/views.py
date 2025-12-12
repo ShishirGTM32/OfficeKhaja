@@ -9,6 +9,7 @@ from users.models import UserSubscription, CustomUser
 from decimal import Decimal
 from django.db import transaction
 from datetime import  timedelta
+from django.http import Http404
 from .permissions import IsStaff, IsSubscribedUser
 from khaja.pagination import MenuInfiniteScrollPagination
 from orders.models import Order, Cart, CartItem, OrderItem, ComboOrderItem
@@ -111,14 +112,20 @@ class CartListView(APIView):
     def delete(self, request):
         pk = request.data.get('pk')
         if pk:
-            cart_item = get_object_or_404(CartItem, pk=pk, cart__user=request.user)
+            try:
+                cart_item = get_object_or_404(CartItem, pk=pk, cart__user=request.user)
+            except Http404:
+                return Response("Cart Item not found", status=status.HTTP_404_NOT_FOUND)
             cart_item.delete()
             return Response(
                 {"message": "Item removed from cart"}, 
                 status=status.HTTP_204_NO_CONTENT
             )
         else:
-            cart = get_object_or_404(Cart, user=request.user)
+            try:
+                cart = get_object_or_404(Cart, cart__user=request.user)
+            except Http404:
+                return Response("Cart not found", status=status.HTTP_404_NOT_FOUND)
             cart.clear()
             return Response(
                 {"message": "Cart cleared successfully"}, 
@@ -138,12 +145,18 @@ class CartItemDetailView(APIView):
         return get_object_or_404(CartItem, pk=pk, cart__user=user)
 
     def get(self, request, pk):
-        cart_item = self.get_object(pk, request.user)
+        try:
+            cart_item = self.get_object(pk, request.user)
+        except Http404:
+            return Response("Cart item not found", status= status.HTTP_404_NOT_FOUND)
         serializer = CartItemSerializer(cart_item)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def delete(self, request, pk):
-        cart_item = self.get_object(pk, request.user)
+        try:
+            cart_item = self.get_object(pk, request.user)
+        except Http404:
+            return Response("Cart item not found", status= status.HTTP_404_NOT_FOUND)
         cart_item.delete()
         return Response(
             {"message": "Item removed from cart"}, 
@@ -245,7 +258,10 @@ class OrderListView(APIView):
     def patch(self, request):
         pk = request.data.get("order_id")
         data = request.data
-        order = get_object_or_404(Order, pk=pk)
+        try:
+            order = get_object_or_404(Order, pk=pk)
+        except Http404:
+            return Response("Order not found please enter valid order id.", status=status.HTTP_404_NOT_FOUND)
         serializer = OrderSerializer(order, data=data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -265,13 +281,19 @@ class OrderDetailView(APIView):
         return get_object_or_404(Order, pk=pk, user=user)
 
     def get(self, request, pk):
-        order = self.get_object(pk, request.user)
+        try:
+            order = self.get_object(pk, request.user)
+        except Http404:
+            return Response("Order not found please enter valid order id.", status=status.HTTP_404_NOT_FOUND)
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
     def patch(self, request, pk):
         data = request.data
-        order = get_object_or_404(Order, pk=pk)
+        try:
+            order = get_object_or_404(Order, pk=pk)
+        except Http404:
+            return Response("Order not found please enter valid order id.", status=status.HTTP_404_NOT_FOUND)
         serializer = OrderSerializer(order, data=data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
@@ -286,7 +308,10 @@ class OrderCancelView(APIView):
         return [permission() for permission in permission_classes]
 
     def post(self, request, pk):
-        order = get_object_or_404(Order, pk=pk, user=request.user)
+        try:
+            order = get_object_or_404(Order, pk=pk, user=request.user)
+        except Http404:
+            return Response("Order not found please enter valid order id.", status=status.HTTP_404_NOT_FOUND)
 
         if order.status not in ['PENDING']:
             return Response(
