@@ -8,8 +8,8 @@ from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Count, F
 from khaja.pagination import MenuInfiniteScrollPagination
-from .models import Blog, Comments, HashTags
-from .serializers import BlogSerializer, CommentSerializer, LikeSerializer, DisLikeSerializer
+from .models import Blog, Comments, HashTags, PostReaction
+from .serializers import BlogSerializer, CommentSerializer, PostReactionSerializer
 
 
 class BlogView(APIView):
@@ -54,10 +54,9 @@ class BlogView(APIView):
  
         return paginator.get_paginated_response(response_data)
 
-
     def post(self, request):
         serializer = BlogSerializer(data=request.data, context={'request': request})
-        serializer.is_valid(raise_exception=True)
+        serializer.is_valid(raise_exception=True)   
         serializer.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
@@ -140,68 +139,30 @@ class CommentView(APIView):
         comment.delete()
         return Response("Comment Successfully deleted", status=status.HTTP_200_OK)
 
+class PostReactionView(APIView):
+    permission_classes=[IsAuthenticated]
 
-class LikeView(APIView):
-    def get_permissions(self):
-        if self.request.method in ['POST']:
-            permission_classes = [IsAuthenticated]
-        else:
-            permission_classes = [IsAdminOrReadOnly]
-        return [permission() for permission in permission_classes]
-
-    def post(self, request, slug, comment_id=None):
+    def post(self, request, slug, reaction, comment_id=None):
         if slug:
             blog_id = get_object_or_404(Blog, slug=slug)
         if comment_id:
             comment_id = get_object_or_404(Comments, pk=comment_id)
             blog_id=None
 
-        serializer = LikeSerializer(
-            data=request.data,
-            context={
-                'request': request,
-                'blog_id': blog_id,
-                'comment_id': comment_id
-            }
-        )
-        serializer.is_valid(raise_exception=True)
-        like = serializer.save()
+        seiralizer = PostReactionSerializer(data=request.data,
+                                            context={
+                                                'request':request,
+                                                'blog_id':blog_id,
+                                                'comment':comment_id,
+                                                'reaction':reaction
+                                            })
+        seiralizer.is_valid(raise_exception=True)
+        rea = seiralizer.save()
 
-        if like is None:
-            return Response({"message": "Like removed (toggle off)."}, status=status.HTTP_200_OK)
+        if rea is None:
+            return Response(f"{reaction} changed.", status=status.HTTP_200_OK)
+        return Response(f"{reaction} sucessfullt added",status=status.HTTP_201_CREATED)
 
-        return Response({"message": "Like added successfully."}, status=status.HTTP_201_CREATED)
-
-
-class DisLikeView(APIView):
-    def get_permissions(self):
-        if self.request.method in ['POST']:
-            permission_classes = [IsAuthenticated]
-        else:
-            permission_classes = [IsAdminOrReadOnly]
-        return [permission() for permission in permission_classes]
-
-    def post(self, request, slug, comment_id=None):
-        if slug:
-            blog_id = get_object_or_404(Blog, slug=slug )
-        if comment_id:
-            comment_id = get_object_or_404(Comments, pk=comment_id)
-            blog_id=None
-        serializer = DisLikeSerializer(
-            data=request.data,
-            context={
-                'request': request,
-                'blog_id': blog_id,
-                'comment_id': comment_id
-            }
-        )
-        serializer.is_valid(raise_exception=True)
-        like = serializer.save()
-
-        if like is None:
-            return Response({"message": "Disliked removed (toggle off)."}, status=status.HTTP_200_OK)
-
-        return Response({"message": "Disliked successfully."}, status=status.HTTP_201_CREATED)
 
 
 class TrendingHashtagsView(APIView):

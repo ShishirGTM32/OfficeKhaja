@@ -3,9 +3,7 @@ from rest_framework import serializers
 from collections import Counter
 from users.serializers import UserSerializer
 from nltk.corpus import stopwords
-from nltk.stem import WordNetLemmatizer
-import nltk
-from .models import Blog, Comments, Likes, Dislikes, HashTags, BlogMetadata, Tag
+from .models import Blog, Comments,  HashTags, BlogMetadata, Tag, PostReaction
 
 class HashTagSerializer(serializers.ModelSerializer):
     class Meta:
@@ -66,6 +64,7 @@ class BlogSerializer(serializers.ModelSerializer):
             'blog_id', 'blog_title', 'blog_description',
             'tags', 'hashtags', 'metadata', 'comments', 'likes', 'dislikes',
             'user', 'image', 'created_at', 'slug'
+
         ]
         read_only_fields = ['blog_id', 'created_at', 'likes', 'dislikes', 'user', 'slug', 'metadata']
 
@@ -163,75 +162,45 @@ class BlogSerializer(serializers.ModelSerializer):
         return instance
 
     
-class LikeSerializer(serializers.ModelSerializer):
+class PostReactionSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     blog = BlogSerializer(read_only=True)
     comments = CommentSerializer(read_only=True)
 
     class Meta:
-        model = Likes
-        fields = ['like_id', 'blog', 'user', 'comments']
-        read_only_fields = ['like_id', 'blog', 'user', 'comments']
+        model = PostReaction
+        fields = ['id', 'user', 'blog', 'comments', 'reaction', 'created_at']
+        read_only_fields = ['id', 'user', 'blog', 'comments', 'created_at', 'reaction']
 
     def create(self, validated_data):
         user = self.context['request'].user
         blog_id = self.context.get('blog_id')
         comment_id = self.context.get('comment_id')
+        reaction_type = self.context.get('reaction') 
+
         if blog_id and comment_id:
-            raise serializers.ValidationError("You can like either a blog or a comment, not both.")
+            raise serializers.ValidationError("You can react to either a blog or a comment, not both.")
         if not blog_id and not comment_id:
             raise serializers.ValidationError("You must provide either a blog_id or a comment_id.")
+        if reaction_type not in ['like', 'dislike']:
+            raise serializers.ValidationError("Reaction must be either 'like' or 'dislike'.")
         
+        filter_kwargs = {'user': user}
         if blog_id:
-            Dislikes.objects.filter(user=user, blog=blog_id).delete()
-            existing_like = Likes.objects.filter(user=user, blog=blog_id).first()
-            if existing_like:
-                existing_like.delete()  
-                raise serializers.ValidationError("Like removed (toggle off).")
-            return Likes.objects.create(user=user, blog=blog_id)
+            filter_kwargs['blog_id'] = blog_id.blog_id
+            filter_kwargs['comment'] = None
+        else:
+            filter_kwargs['comment_id'] = comment_id.cid
+            filter_kwargs['blog'] = None
 
-        if comment_id:
-            Dislikes.objects.filter(user=user, comments=comment_id).delete()
-            existing_like = Likes.objects.filter(user=user, comments=comment_id).first()
-            if existing_like:
-                existing_like.delete() 
-                raise serializers.ValidationError("Like removed (toggle off).")
-            return Likes.objects.create(user=user, comments=comment_id)
-
-
-
-class DisLikeSerializer(serializers.ModelSerializer):
-    user = UserSerializer(read_only=True)
-    blog = BlogSerializer(read_only=True)
-    comments = CommentSerializer(read_only=True)
-
-    class Meta:
-        model = Dislikes
-        fields = ['dislike_id', 'blog', 'user', 'comments']
-        read_only_fields = ['dislike_id', 'blog', 'user', 'comments']
-
-    def create(self, validated_data):
-        user = self.context['request'].user
-        blog_id = self.context.get('blog_id')
-        comment_id = self.context.get('comment_id')
-        if blog_id and comment_id:
-            raise serializers.ValidationError("You can like either a blog or a comment, not both.")
-        if not blog_id and not comment_id:
-            raise serializers.ValidationError("You must provide either a blog_id or a comment_id.")
-        
-        if blog_id:
-            Likes.objects.filter(user=user, blog=blog_id).delete()
-            existing_like = Dislikes.objects.filter(user=user, blog=blog_id).first()
-            if existing_like:
-                existing_like.delete()  
-                raise serializers.ValidationError("Dislike removed (toggle off).")
-            return Dislikes.objects.create(user=user, blog=blog_id)
-
-        if comment_id:
-            Likes.objects.filter(user=user, comments=comment_id).delete()
-            existing_like = Dislikes.objects.filter(user=user, comments=comment_id).first()
-            if existing_like:
-                existing_like.delete() 
-                raise serializers.ValidationError("Dislike removed (toggle off).")
-            return Dislikes.objects.create(user=user, comments=comment_id)
-        
+        existing = PostReaction.objects.filter(**filter_kwargs).first()
+        if existing:
+            if existing.reaction == reaction_type:
+                existing.delete()
+                raise serializers.ValidationError(f"{reaction_type.capitalize()} removed (toggle off).")
+            else:
+                existing.reaction = reaction_type
+                existing.save()
+                return existing
+            
+        return PostReaction.objects.create(reaction=reaction_type, **filter_kwargs)     

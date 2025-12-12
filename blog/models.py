@@ -1,6 +1,7 @@
 from django.db import models
 from users.models import CustomUser
 from django.utils.text import slugify
+from django.db.models import Q
 
 class HashTags(models.Model):
     name = models.CharField(max_length=100, unique=True)
@@ -45,11 +46,13 @@ class Blog(models.Model):
 
     @property 
     def like_count(self):
-        return Likes.objects.filter(blog=self).count()
+        return PostReaction.objects.filter(blog=self, reaction='like').count()
+
 
     @property
     def dislike_count(self):
-        return Dislikes.objects.filter(blog=self).count()
+        return PostReaction.objects.filter(blog=self, reaction='dislike').count()
+
 
 
 class Comments(models.Model):
@@ -64,56 +67,22 @@ class Comments(models.Model):
         return self.comment
     
     def like_count(self):
-        return Likes.objects.filter(comments=self).count()
+        return PostReaction.objects.filter(comments=self, reaction='dislike').count()
     
     def dislike_count(self):
-        return Dislikes.objects.filter(comments=self).count()
+        return PostReaction.objects.filter(comments=self, reaction='dislike').count()
 
-
-class Likes(models.Model):
-    like_id = models.AutoField(primary_key=True)
-    blog = models.ForeignKey(Blog, on_delete=models.CASCADE, null=True, blank=True)
+class PostReaction(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    comments = models.ForeignKey(Comments, on_delete=models.CASCADE, null=True, blank=True)
+    blog = models.ForeignKey(Blog, on_delete=models.CASCADE, blank=True, null=True)
+    comment = models.ForeignKey(Comments, on_delete=models.CASCADE, blank=True, null=True)
+    reaction = models.CharField(max_length=10, choices=[('like','Like'), ('dislike','Dislike')])
+    created_at = models.DateTimeField(auto_now_add=True)
 
-    def __str__(self):
-        return f"{self.user} liked {self.blog or self.comment}"
-    
     class Meta:
         constraints = [
-            models.UniqueConstraint(
-                fields=['user', 'blog'],
-                name='unique_user_blog_like'
-            ),
-            models.UniqueConstraint(
-                fields=['user', 'comments'],
-                name='unique_user_comment_like'
-            )
-        ]
-
-class Dislikes(models.Model):
-    dislike_id = models.AutoField(primary_key=True)
-    blog = models.ForeignKey(Blog, on_delete=models.CASCADE, null=True, blank=True)
-    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
-    comments = models.ForeignKey(Comments, on_delete=models.CASCADE, null=True, blank=True)
-
-    def __str__(self):
-        return f"{self.user} disliked {self.blog or self.comment}"
-
-
-    def get_dislike_count(self):
-        return Blog.objects.filter(blog_id=self.blog).count
-    
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=['user', 'blog'],
-                name='unique_user_blog_dislike'
-            ),
-            models.UniqueConstraint(
-                fields=['user', 'comments'],
-                name='unique_user_comment_dislike'
-            )
+            models.UniqueConstraint(fields=['user', 'blog'], condition=Q(blog__isnull=False), name='unique_user_blog'),
+            models.UniqueConstraint(fields=['user', 'comment'], condition=Q(comment__isnull=False), name='unique_user_comment'),
         ]
 
 
