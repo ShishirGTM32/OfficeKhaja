@@ -142,11 +142,13 @@ class CommentView(APIView):
 class PostReactionView(APIView):
     permission_classes=[IsAuthenticated]
 
-    def post(self, request, slug, reaction, comment_id=None):
+    def post(self, request, slug, reaction, cid=None):
         if slug:
             blog_id = get_object_or_404(Blog, slug=slug)
-        if comment_id:
-            comment_id = get_object_or_404(Comments, pk=comment_id)
+            comment_id=None
+        if cid:
+            comment_id = get_object_or_404(Comments, comment_id=cid)
+            print(comment_id)
             blog_id=None
 
         seiralizer = PostReactionSerializer(data=request.data,

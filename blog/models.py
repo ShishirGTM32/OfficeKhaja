@@ -67,10 +67,10 @@ class Comments(models.Model):
         return self.comment
     
     def like_count(self):
-        return PostReaction.objects.filter(comments=self, reaction='dislike').count()
+        return PostReaction.objects.filter(comment=self, reaction='like').count()
     
     def dislike_count(self):
-        return PostReaction.objects.filter(comments=self, reaction='dislike').count()
+        return PostReaction.objects.filter(comment=self, reaction='dislike').count()
 
 class PostReaction(models.Model):
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)

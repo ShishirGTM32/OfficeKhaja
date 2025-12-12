@@ -165,17 +165,17 @@ class BlogSerializer(serializers.ModelSerializer):
 class PostReactionSerializer(serializers.ModelSerializer):
     user = UserSerializer(read_only=True)
     blog = BlogSerializer(read_only=True)
-    comments = CommentSerializer(read_only=True)
+    comment = CommentSerializer(read_only=True)
 
     class Meta:
         model = PostReaction
-        fields = ['id', 'user', 'blog', 'comments', 'reaction', 'created_at']
-        read_only_fields = ['id', 'user', 'blog', 'comments', 'created_at', 'reaction']
+        fields = ['id', 'user', 'blog', 'comment', 'reaction', 'created_at']
+        read_only_fields = ['id', 'user', 'blog', 'comment', 'created_at', 'reaction']
 
     def create(self, validated_data):
         user = self.context['request'].user
         blog_id = self.context.get('blog_id')
-        comment_id = self.context.get('comment_id')
+        comment_id = self.context.get('comment')
         reaction_type = self.context.get('reaction') 
 
         if blog_id and comment_id:
@@ -188,9 +188,9 @@ class PostReactionSerializer(serializers.ModelSerializer):
         filter_kwargs = {'user': user}
         if blog_id:
             filter_kwargs['blog_id'] = blog_id.blog_id
-            filter_kwargs['comment'] = None
+            filter_kwargs['comment_id'] = None
         else:
-            filter_kwargs['comment_id'] = comment_id.cid
+            filter_kwargs['comment_id'] = comment_id.comment_id
             filter_kwargs['blog'] = None
 
         existing = PostReaction.objects.filter(**filter_kwargs).first()
