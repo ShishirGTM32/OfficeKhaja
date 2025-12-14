@@ -3,6 +3,7 @@ from django.db import models
 from users.models import CustomUser
 from django.contrib.postgres.fields import ArrayField
 from users.models import UserSubscription
+from django.utils.text import slugify
 from datetime import datetime
 
 class Meals(models.Model):
@@ -20,6 +21,7 @@ class Meals(models.Model):
     ]
 
     meal_id = models.AutoField(primary_key=True)
+    slug = models.SlugField(unique=True)
     name = models.CharField(max_length=50)
     description = models.TextField()
     type = models.CharField(choices=MEAL_TYPE, max_length=10)
@@ -33,6 +35,16 @@ class Meals(models.Model):
 
     class Meta:
         verbose_name_plural = "Meals"
+    
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            super().save(*args, **kwargs)
+            base_slug = slugify(self.name)
+            self.slug = f"{base_slug}-{self.meal_id}"
+            kwargs['force_insert'] = False
+            super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 
 class Ingredient(models.Model):
