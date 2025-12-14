@@ -26,7 +26,8 @@ urlpatterns = [
     path('api/auth/', include('users.urls')),
     path('api/admin/', include('orders.admin_urls')),
     path('api/staff/', include('orders.staff_urls')),
-    path('api/blogs/', include('blog.urls'))
+    path('api/blogs/', include('blog.urls')),
+    path('api/noti/', include('notifications.urls')),
 ]
 
 if settings.DEBUG:

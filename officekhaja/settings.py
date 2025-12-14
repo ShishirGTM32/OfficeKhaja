@@ -25,15 +25,13 @@ config = Config(repository='officekhaja/.env')
 # SECURITY WARNING: keep the secret key used in production secret!
 SECRET_KEY = 'django-insecure-mxwcfv-zk+hq-sp*^lucq__(=i&ir2ly3s_-gp3d6u=xuk=lzx'
 
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
 ALLOWED_HOSTS = []
 
 
-# Application definition
-
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -48,8 +46,9 @@ INSTALLED_APPS = [
     'khaja',
     'orders',
     'users',
-    'blog'
-    
+    'blog',
+    'notifications.apps.NotificationsConfig',
+    'channels',
 ]
 
 MIDDLEWARE = [
@@ -81,7 +80,13 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'officekhaja.wsgi.application'
 AUTH_USER_MODEL = "users.CustomUser"
+ASGI_APPLICATION = 'officekhaja.asgi.application'
 
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
 
 # Database
 # https://docs.djangoproject.com/en/6.0/ref/settings/#databases

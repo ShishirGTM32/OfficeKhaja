@@ -46,9 +46,9 @@ class MealSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Meals
-        fields = ['meal_id', 'name', 'type', 'description', 'meal_category', 
+        fields = ['meal_id', 'name', 'type', 'description', 'meal_category', 'slug',
                   'price', 'image', 'weight', 'nutrition', 'ingredients', 'ingredient_ids']
-        read_only_fields = ['meal_id']
+        read_only_fields = ['meal_id', 'slug']
 
     def get_ingredients(self, obj):
         if hasattr(obj, 'meal_ingredients'):

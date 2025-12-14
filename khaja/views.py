@@ -7,6 +7,7 @@ from django.utils import timezone
 from .models import Meals, CustomMeal, Nutrition, Combo, Ingredient, MealIngredient
 from .pagination import MenuInfiniteScrollPagination
 from users.models import CustomUser, UserSubscription
+from users.views import check_subscription
 from orders.models import ComboOrderItem
 from orders.permissions import IsSubscribedUser, IsStaff
 from django.http import Http404
@@ -132,17 +133,17 @@ class MealDetailView(APIView):
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
 
-    def get(self, request, meal_id):
+    def get(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         serializer = MealSerializer(meal)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-    def put(self, request, meal_id):
+    def put(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         serializer = MealSerializer(meal, data=request.data, partial=True)
@@ -169,9 +170,9 @@ class MealDetailView(APIView):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-    def delete(self, request, meal_id):
+    def delete(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         meal.delete()
@@ -189,9 +190,9 @@ class MealIngredientsView(APIView):
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
 
-    def get(self, request, meal_id):
+    def get(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found",status=status.HTTP_404_NOT_FOUND)
         
@@ -204,9 +205,9 @@ class MealIngredientsView(APIView):
             status=status.HTTP_200_OK
         )
 
-    def post(self, request, meal_id):
+    def post(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         ingredient_ids = request.data.get('ingredient_ids', [])
@@ -234,9 +235,9 @@ class NutritionView(APIView):
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
 
-    def get(self, request, meal_id):
+    def get(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         
@@ -249,9 +250,9 @@ class NutritionView(APIView):
             status=status.HTTP_404_NOT_FOUND
         )
     
-    def post(self, request, meal_id):
+    def post(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         
@@ -267,9 +268,9 @@ class NutritionView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
     
-    def put(self, request, meal_id):
+    def put(self, request, slug):
         try:
-            meal = get_object_or_404(Meals, meal_id=meal_id)
+            meal = get_object_or_404(Meals, slug=slug)
         except Http404:
             return Response("Meal not found", status=status.HTTP_404_NOT_FOUND)
         
@@ -306,6 +307,8 @@ class CustomMealListView(APIView):
         return paginator.get_paginated_response(serializer.data)
     
     def post(self, request):
+        if check_subscription(request.user):
+            return Response("Subscription not renewed", status=status.HTTP_403_FORBIDDEN)
         serializer = CustomMealSerializer(
             data=request.data,
             context={'request': request}
