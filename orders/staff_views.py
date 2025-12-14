@@ -1,9 +1,9 @@
-# orders/staff_views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
+from django.http import Http404
 from django.core.mail import send_mail
 from django.conf import settings
 from django.utils import timezone
@@ -41,12 +41,18 @@ class StaffOrderDetailView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request, order_id):
-        order = get_object_or_404(Order, id=order_id)
+        try:
+            order = get_object_or_404(Order, id=order_id)
+        except Http404:
+            return Response(f"Order with id #{order_id} not found.", status=status.HTTP_404_NOT_FOUND)
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, order_id):
-        order = get_object_or_404(Order, id=order_id)
+        try:
+            order = get_object_or_404(Order, id=order_id)
+        except Http404:
+            return Response(f"Order with id #{order_id} not found.", status=status.HTTP_404_NOT_FOUND)
         
         new_status = request.data.get('status')
         if not new_status:
@@ -55,10 +61,10 @@ class StaffOrderDetailView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        valid_statuses = ['PENDING', 'PROCESSING', 'DELIVERING', 'DELIVERED', 'CANCELLED']
-        if new_status.upper() not in valid_statuses:
+        valid_status = ['PENDING', 'PROCESSING', 'DELIVERING', 'DELIVERED', 'CANCELLED']
+        if new_status.upper() not in valid_status:
             return Response(
-                {"error": f"Invalid status. Choose from: {', '.join(valid_statuses)}"}, 
+                {"error": f"Invalid status. Choose from: {', '.join(valid_status)}"}, 
                 status=status.HTTP_400_BAD_REQUEST
             )
         
@@ -93,7 +99,6 @@ class StaffOrderDetailView(APIView):
     def send_status_update_email(self, order, old_status, new_status):
         user = order.user
         user = CustomUser.objects.get(phone_number=user.phone_number)
-
         status_messages = {
             'PROCESSING': 'Your order is being prepared.',
             'DELIVERING': 'Your order is out for delivery!',
@@ -162,8 +167,10 @@ class StaffComboOrderItemDetailView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request, item_id):
-        """Get combo order item details"""
-        combo_item = get_object_or_404(ComboOrderItem, id=item_id)
+        try:
+            combo_item = get_object_or_404(ComboOrderItem, id=item_id)
+        except Http404:
+            return Response("Combo Item not found with the requested id.", status=status.HTTP_404_NOT_FOUND)
         serializer = ComboOrderItemSerializer(combo_item)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -264,7 +271,10 @@ class StaffMealAvailabilityView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def patch(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal not found with the request id.", status=status.HTTP_404_NOT_FOUND)
         
         is_available = request.data.get('is_available')
         if is_available is None:

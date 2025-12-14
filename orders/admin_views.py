@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.core.mail import send_mail
 from django.conf import settings
+from django.http import Http404
 from django.utils import timezone
 from django.db.models import Count, Sum, Q
 from orders.permissions import IsStaff
@@ -54,17 +55,22 @@ class AdminUserListView(APIView):
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
 class AdminUserDetailView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request, user_id):
-        user = get_object_or_404(CustomUser, id=user_id)
+        try:
+            user = get_object_or_404(CustomUser, id=user_id)
+        except Http404:
+            return Response("Invalid user please check the user id again.", status=status.HTTP_404_NOT_FOUND)
         serializer = UserSerializer(user)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, user_id):
-        user = get_object_or_404(CustomUser, id=user_id)
+        try:
+            user = get_object_or_404(CustomUser, id=user_id)
+        except Http404:
+            return Response("Invalid user please check the user id again.", status=status.HTTP_404_NOT_FOUND)
         serializer = UserSerializer(user, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -72,7 +78,10 @@ class AdminUserDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, user_id):
-        user = get_object_or_404(CustomUser, id=user_id)
+        try:
+            user = get_object_or_404(CustomUser, id=user_id)
+        except Http404:
+            return Response("Invalid user please check the user id again.", status=status.HTTP_404_NOT_FOUND)
         user.delete()
         return Response(
             {"message": "User deleted successfully"}, 
@@ -85,8 +94,7 @@ class AdminOrderListView(APIView):
 
     def get(self, request):
         orders = Order.objects.all().order_by('-created_at')
-        
-        # Filters
+
         status_filter = request.query_params.get('status')
         user_id = request.query_params.get('user_id')
         date_from = request.query_params.get('date_from')
@@ -111,12 +119,18 @@ class AdminOrderDetailView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request, order_id):
-        order = get_object_or_404(Order, id=order_id)
+        try:
+            order = get_object_or_404(Order, id=order_id)
+        except Http404:
+            return Response(f"Corresponding order with id {order_id} not found.", status=status.HTTP_404_NOT_FOUND)
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, order_id):
-        order = get_object_or_404(Order, id=order_id)
+        try:
+            order = get_object_or_404(Order, id=order_id)
+        except Http404:
+            return Response(f"Corresponding order with id {order_id} not found.", status=status.HTTP_404_NOT_FOUND)
         serializer = OrderSerializer(order, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -124,7 +138,10 @@ class AdminOrderDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, order_id):
-        order = get_object_or_404(Order, id=order_id)
+        try:
+            order = get_object_or_404(Order, id=order_id)
+        except Http404:
+            return Response(f"Corresponding order with id {order_id} not found.", status=status.HTTP_404_NOT_FOUND)
         
         if order.status not in ['CANCELLED', 'DELIVERED']:
             return Response(
@@ -159,12 +176,18 @@ class AdminSubscriptionDetailView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request, sid):
-        subscription = get_object_or_404(Subscription, sid=sid)
+        try:
+            subscription = get_object_or_404(Subscription, sid=sid)
+        except Http404:
+            return Response("Subscription detail not foun.", status=status.HTTP_404_NOT_FOUND)
         serializer = SubscriptionSerializer(subscription)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def put(self, request, sid):
-        subscription = get_object_or_404(Subscription, sid=sid)
+        try:
+            subscription = get_object_or_404(Subscription, sid=sid)
+        except Http404:
+            return Response("Subscription details not found.", status=status.HTTP_404_NOT_FOUND)
         serializer = SubscriptionSerializer(subscription, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -172,7 +195,10 @@ class AdminSubscriptionDetailView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, sid):
-        subscription = get_object_or_404(Subscription, sid=sid)
+        try:
+            subscription = get_object_or_404(Subscription, sid=sid)
+        except Http404:
+            return Response("Subscriptiond detail not found.", status=status.HTTP_404_NOT_FOUND)
         
         active_users = UserSubscription.objects.filter(plan=subscription, is_active=True).count()
         if active_users > 0:
@@ -193,7 +219,6 @@ class AdminUserSubscriptionListView(APIView):
 
     def get(self, request):
         subscriptions = UserSubscription.objects.all().order_by('-created_at')
-        
         is_active = request.query_params.get('is_active')
         plan_type = request.query_params.get('plan_type')
         
@@ -212,12 +237,18 @@ class AdminUserSubscriptionDetailView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request, sub_id):
-        subscription = get_object_or_404(UserSubscription, sub_id=sub_id)
+        try:
+            subscription = get_object_or_404(UserSubscription, sub_id=sub_id)
+        except Http404:
+            return Response("User Subscription not found.", status=status.HTTP_404_NOT_FOUND)
         serializer = UserSubscriptionSerializer(subscription)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def patch(self, request, sub_id):
-        subscription = get_object_or_404(UserSubscription, sub_id=sub_id)
+        try:
+            subscription = get_object_or_404(UserSubscription, sub_id=sub_id)
+        except Http404:
+            return Response("User Subscription not found.", status=status.HTTP_404_NOT_FOUND)
         serializer = UserSubscriptionSerializer(subscription, data=request.data, partial=True)
         if serializer.is_valid():
             serializer.save()
@@ -243,7 +274,10 @@ class AdminMealAvailabilityView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def patch(self, request, meal_id):
-        meal = get_object_or_404(Meals, meal_id=meal_id)
+        try:
+            meal = get_object_or_404(Meals, meal_id=meal_id)
+        except Http404:
+            return Response("Meal object not found.", status=status.HTTP_404_NOT_FOUND)
         
         is_available = request.data.get('is_available')
         if is_available is None:
@@ -268,7 +302,6 @@ class AdminCustomMealListView(APIView):
 
     def get(self, request):
         custom_meals = CustomMeal.objects.all().order_by('-created_at')
-        
         user_id = request.query_params.get('user_id')
         category = request.query_params.get('category')
         is_active = request.query_params.get('is_active')
@@ -290,12 +323,18 @@ class AdminCustomMealDetailView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request, combo_id):
-        custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id)
+        try:
+            custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id)
+        except Http404:
+            return Response("Custom meal not found with this id.", status=status.HTTP_404_NOT_FOUND)
         serializer = CustomMealSerializer(custom_meal)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
     def delete(self, request, combo_id):
-        custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id)
+        try:
+            custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id)
+        except Http404:
+            return Response("Custom meal not found with this id.", status=status.HTTP_404_NOT_FOUND)
         custom_meal.delete()
         return Response(
             {"message": "Custom meal deleted successfully"}, 
