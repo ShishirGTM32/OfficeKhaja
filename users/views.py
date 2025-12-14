@@ -30,6 +30,20 @@ def get_tokens_for_user(user):
     }
 
 
+def check_subscription(user):
+    subscription = UserSubscription.objects.filter(user=user).first()
+    if subscription.expires_on < timezone.now().date():
+        subscription.is_active = False
+        subscription.save()
+        user = user
+        user.status = False
+        user.save()
+        return True
+    elif not subscription.is_active:
+        return True
+    else:
+        return False
+
 class UserRegistrationView(APIView):
     permission_classes = [AllowAny]
 
@@ -87,7 +101,7 @@ class UserLogoutView(APIView):
 
 class UserProfileView(APIView):
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST']:
+        if self.request.method in ['GET', 'PUT']:
             permission_classes = [IsAuthenticated, IsSubscribedUser]
         else:
             permission_classes = [IsStaff]
@@ -131,22 +145,17 @@ class SubscriptionListView(APIView):
 class UserSubscriptionView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET', 'POST', 'DELETE']:
-            permission_classes = [IsAuthenticated, IsSubscribedUser]
+            permission_classes = [IsAuthenticated]
         else:
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
 
     def get(self, request):
-
         subscription = UserSubscription.objects.get(user=request.user)
-        
-        if subscription.expires_on < timezone.now().date():
-            subscription.is_active = False
-            subscription.save()
-            user = request.user
-            user.status = False
-            user.save()
-        
+        if not subscription:
+            return Response("You are not subscribed to any plan please subscribe.", status=status.HTTP_403_FORBIDDEN)        
+        if check_subscription(request.user):
+            return Response("Your plan has expired please renew subscription or subscription not active", status=status.HTTP_200_OK)
         serializer = UserSubscriptionSerializer(subscription)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
@@ -191,9 +200,11 @@ class UserSubscriptionView(APIView):
     def delete(self, request):
         try:
             subscription = UserSubscription.objects.get(user=request.user)
+            if not subscription:
+                return Response("Subscription not available. Can't cancel.", status=status.HTTP_400_BAD_REQUEST)
             from orders.models import Order
             active_orders = Order.objects.filter(
-                user=request.user,
+                user=request.user.id,
                 status__in=['PENDING', 'PROCESSING', 'DELIVERING']
             ).exists()
             
@@ -211,7 +222,7 @@ class UserSubscriptionView(APIView):
             
             return Response({
                 'message': 'Subscription cancelled successfully'
-            }, status=status.HTTP_204_NO_CONTENT)
+            }, status=status.HTTP_200_OK)
         except UserSubscription.DoesNotExist:
             return Response({
                 'error': 'No active subscription found'

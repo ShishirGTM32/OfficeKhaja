@@ -12,6 +12,7 @@ from datetime import  timedelta
 from django.http import Http404
 from .permissions import IsStaff, IsSubscribedUser
 from khaja.pagination import MenuInfiniteScrollPagination
+from users.views import check_subscription
 from orders.models import Order, Cart, CartItem, OrderItem, ComboOrderItem
 from .serializers import (
     OrderSerializer, CartItemSerializer, OrderCreateSerializer
@@ -175,7 +176,7 @@ class OrderListView(APIView):
     def get(self, request):
         status_filter = request.query_params.get('status', None)
         orders = Order.objects.filter(user=request.user)
-
+        
         if status_filter:
             orders = orders.filter(status=status_filter.upper())
         paginator = MenuInfiniteScrollPagination()
@@ -218,6 +219,8 @@ class OrderListView(APIView):
                 if cart_item.custom_meal:
                     custom_meal = cart_item.custom_meal
                     subscription = UserSubscription.objects.get(user=request.user)
+                    if check_subscription(request.user):
+                        return Response("Subscription not renewed", status=status.HTTP_403_FORBIDDEN)
                     price_snapshot = custom_meal.get_total_price()
                     if custom_meal.delivery_time < timezone.now():
                         return Response("Delivery date is not present time, is in past. Re-Change the date and proceed to order.", status=status.HTTP_403_FORBIDDEN) 

@@ -93,7 +93,7 @@ class StaffOrderDetailView(APIView):
     def send_status_update_email(self, order, old_status, new_status):
         user = order.user
         user = CustomUser.objects.get(phone_number=user.phone_number)
-        print(user)
+
         status_messages = {
             'PROCESSING': 'Your order is being prepared.',
             'DELIVERING': 'Your order is out for delivery!',
