@@ -70,7 +70,6 @@ class UserLoginView(APIView):
         user = serializer.validated_data
         
         tokens = get_tokens_for_user(user)
-        
         return Response({
             'user': UserSerializer(user).data,
             'tokens': tokens,

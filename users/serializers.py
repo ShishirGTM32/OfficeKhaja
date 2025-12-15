@@ -74,10 +74,12 @@ class UserLoginSerializer(serializers.Serializer):
 
         if phone_number and password:
             user = authenticate(phone_number=phone_number, password=password)
+            user.last_login = timezone.now()
             if not user:
                 raise serializers.ValidationError('Invalid phone number or password')
             if not user.is_active:
-                raise serializers.ValidationError('User account is disabled')
+                raise serializers.ValidationError('User account is not active')
+            user.save()
             return user
         raise serializers.ValidationError('Must include "phone_number" and "password"')
 
