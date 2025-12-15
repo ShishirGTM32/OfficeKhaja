@@ -80,14 +80,14 @@ class BlogSerializer(serializers.ModelSerializer):
         raw_tags = re.findall(r"#(\w+)", description or "")
         return list(set(tag.lower() for tag in raw_tags))
 
-    def extract_tags(self, description, max_tags=5):
+    def extract_tags(self, description):
         if not isinstance(description, str):
             description = str(description)
         clean_text = re.sub(r"#\w+", "", description)
         words = re.findall(r"\b\w+\b", clean_text.lower())
         stopword = set(stopwords.words('english'))
         keywords = [w for w in words if w not in stopword]
-        top_keywords = [w for w, _ in Counter(keywords).most_common(max_tags)]
+        top_keywords = [w for w, _ in Counter(keywords).most_common(10)]
         return top_keywords
 
 

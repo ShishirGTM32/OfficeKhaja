@@ -39,7 +39,7 @@ class BlogView(APIView):
         remaining_blogs = remaining_blogs.annotate(
             likes_total=Count('postreaction', filter=Q(postreaction__reaction='like')),
             dislikes_total=Count('postreaction', filter=Q(postreaction__reaction='dislike')),
-            ratio=(F('likes_total') + 1.0) / (F('dislikes_total') + 1.0)
+            ratio=(F('likes_total') + 1.0) / (F('dislikes_total') + 1.0),
         ).order_by('-ratio')
 
         paginator = MenuInfiniteScrollPagination()
@@ -126,7 +126,9 @@ class CommentView(APIView):
         serializer.is_valid(raise_exception=True)
         comment = serializer.save()
         if parent_id:
-            parent_comment = Comments.objects.get(comment_id=parent_id)
+            parent_comment = Comments.objects.filter(comment_id=parent_id, blog=blog).first()
+            if not parent_comment:
+                return Response("Comment not of this blog cant add", status=status.HTTP_403_FORBIDDEN)
             comment.parent = parent_comment
             comment.save()
         return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -148,14 +150,15 @@ class CommentView(APIView):
         comment.delete()
         return Response("Comment Successfully deleted", status=status.HTTP_204_NO_CONTENT)
 
+
 class PostReactionView(APIView):
     permission_classes=[IsAuthenticated]
 
     def post(self, request, slug, reaction, cid=None):
         if slug:
-            blog_id = Blog.objects.filter(slug=slug, user=request.user).first()
+            blog_id = Blog.objects.filter(slug=slug).first()
             if not blog_id:
-                return Response(f"Blog not found with slud {slug}")
+                return Response(f"Blog not found with slus {slug}")
             comment_id=None
         if cid:
             comment_id = Comments.objects.filter(comment_id=cid, user=request.user).first()
@@ -171,7 +174,6 @@ class PostReactionView(APIView):
         if rea is None:
             return Response(f"{reaction} changed.", status=status.HTTP_200_OK)
         return Response(f"{reaction} sucessfullt added",status=status.HTTP_201_CREATED)
-
 
 
 class TrendingHashtagsView(APIView):
