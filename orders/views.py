@@ -6,7 +6,6 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from khaja.models import Meals, CustomMeal, Combo
 from users.models import UserSubscription, CustomUser
-from decimal import Decimal
 from django.db import transaction
 from datetime import  timedelta
 from django.http import Http404
