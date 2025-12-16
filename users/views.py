@@ -10,6 +10,7 @@ from orders.permissions import IsStaff, IsSubscribedUser
 import random
 from django.core.mail import send_mail
 from django.conf import settings
+from django.core.cache import cache
 from .serializers import (
     SubscriptionSerializer, 
     UserSerializer, 
@@ -48,16 +49,32 @@ class UserRegistrationView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = UserRegistrationSerializer(data=request.data, context = {"request":request})
+        serializer = UserRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+        otp = str(random.randint(100000, 999999))
+        cache_key = f"otp:register:{user.id}"
+        cache.set(
+            cache_key,
+            {"otp": otp, "created_at": timezone.now().isoformat()},
+            timeout=300
+        )
+
+        send_mail(
+            'Registration Confirmation OTP',
+            f'Your OTP code is {otp}',
+            settings.DEFAULT_FROM_EMAIL,
+            [user.email],
+            fail_silently=False
+        )
+
         tokens = get_tokens_for_user(user)
-        
         return Response({
             'user': UserSerializer(user).data,
             'tokens': tokens,
             'is_admin': user.is_staff,
-            'message': 'User registered successfully'
+            'message': 'User registered successfully. OTP sent to email.',
+            'user_id': user.id
         }, status=status.HTTP_201_CREATED)
 
 
@@ -229,86 +246,77 @@ class UserSubscriptionView(APIView):
         )
 
 
-class ResetPasswordRequestView(APIView):
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = ResetPasswordRequestSerializer(data=request.data, context={"request":request})
-        serializer.is_valid(raise_exception=True)
-        return Response("OTP sent to your mail.", status=status.HTTP_200_OK)
-    
-
 class OTPVerificationView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = OTPSerializer(data=request.data, context={"request": request})
+        serializer = OTPSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+
         otp_type = serializer.validated_data['otp_type']
         user_id = serializer.validated_data['user_id']
 
-        if otp_type == 'register' and user_id:
+        if otp_type == 'register':
             user = CustomUser.objects.get(id=user_id)
             user.is_active = True
             user.save()
-            request.session.pop('register_user_id', None)
-
-            return Response({"detail": "Registration confirmed. Account activated."}, status=status.HTTP_202_ACCEPTED)
-
+            return Response({"detail": "Registration confirmed. Account activated."}, status=202)
         elif otp_type == 'reset_password':
-            return Response({"detail": "OTP verified. You can now reset your password."}, status=status.HTTP_202_ACCEPTED)
+            return Response({"detail": "OTP verified. You can now reset your password."}, status=202)
 
-        return Response({"detail": "OTP verified."}, status=status.HTTP_202_ACCEPTED)
 
+class ResetPasswordRequestView(APIView):
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ResetPasswordRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        return Response({
+            "detail": "Reset password OTP sent to your email.",
+            "user_id": serializer.user_id
+        }, status=status.HTTP_200_OK)
 
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
-    
+
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        if request.session.get("otp_verified") is not True:
-            return Response({"detail": "OTP not verified."}, status=400)
+        user_id = request.data.get('user_id')
+        new_password = serializer.validated_data['new_password']
 
-        user_id = request.session.get("reset_user_id")
         user = CustomUser.objects.get(id=user_id)
-        user.set_password(serializer.validated_data["new_password"])
+        user.set_password(new_password)
         user.save()
-        request.session.pop("otp_verified", None)
-        request.session.pop("reset_user_id", None)
 
-        return Response({"detail": "Password reset successful."})
+        return Response({"detail": "Password reset successful."}, status=status.HTTP_200_OK)
+
 
 class ResendOTPView(APIView):
-    permission_classes=[AllowAny]
+    permission_classes = [AllowAny]
 
     def post(self, request):
-        otp_type = request.session['otp_type']
+        otp_type = request.data.get('otp_type')
+        user_id = request.data.get('user_id')
 
-        if otp_type == 'register':
-            user_id = request.session.get('register_user_id')
-        elif otp_type == 'reset_password':
-            user_id = request.session.get('reset_user_id')
-        else:
-            return Response({"error": "Invalid otp_type"}, status=400)
+        if otp_type not in ['register', 'reset_password'] or not user_id:
+            return Response({"error": "Invalid OTP flow"}, status=400)
 
-        if not user_id:
-            return Response({"error": "No OTP session found. Please request a new OTP flow."}, status=400)
-
-        new_otp = str(random.randint(100000, 999999))
-        request.session['otp'] = new_otp
-        request.session['otp_created_at'] = timezone.now().isoformat()
-        request.session['otp_type'] = otp_type
-
+        cache_key = f"otp:{otp_type}:{user_id}"
+        otp = str(random.randint(100000, 999999))
+        cache.set(
+            cache_key,
+            {"otp": otp, "created_at": timezone.now().isoformat()},
+            timeout=300
+        )
         try:
             user = CustomUser.objects.get(id=user_id)
         except CustomUser.DoesNotExist:
             return Response({"error": "User not found"}, status=404)
-        
         send_mail(
-            'New OTP',
-            f'Your OTP code is {new_otp}.',
+            'Your OTP Code',
+            f'Your OTP code is {otp}',
             settings.DEFAULT_FROM_EMAIL,
             [user.email],
             fail_silently=False

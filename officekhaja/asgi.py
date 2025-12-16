@@ -1,30 +1,19 @@
-"""
-ASGI config for officekhaja project.
-
-It exposes the ASGI callable as a module-level variable named ``application``.
-
-For more information on this file, see
-https://docs.djangoproject.com/en/6.0/howto/deployment/asgi/
-"""
-
 import os
 from django.core.asgi import get_asgi_application
-from channels.auth import AuthMiddlewareStack
 from channels.routing import ProtocolTypeRouter, URLRouter
-from channels.security.websocket import AllowedHostsOriginValidator
-from django.core.asgi import get_asgi_application
+from chatapp.middleware import JwtAuthMiddleware
+import chatapp.routing as cr
+import notifications.routing as nr
 
-os.environ.setdefault("DJANGO_SETTINGS_MODULE", "appchat.settings")
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "officekhaja.settings")
 
 django_asgi_app = get_asgi_application()
 
-from notifications.routing import websocket_urlpatterns
-
-application = ProtocolTypeRouter(
-    {
-        "http": django_asgi_app,
-        "websocket": AllowedHostsOriginValidator(
-            AuthMiddlewareStack(URLRouter(websocket_urlpatterns))
-        ),
-    }
-)
+application = ProtocolTypeRouter({
+    "http": django_asgi_app,
+    "websocket": JwtAuthMiddleware(
+        URLRouter(
+            cr.websocket_urlpatterns + nr.websocket_urlpatterns
+        )
+    ),
+})

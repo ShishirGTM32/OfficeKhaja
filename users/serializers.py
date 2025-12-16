@@ -6,6 +6,7 @@ from .models import CustomUser, Subscription, UserSubscription
 from django.conf import settings
 import random
 from django.utils import timezone
+from django.core.cache import cache
 
 
 class UserRegistrationSerializer(serializers.ModelSerializer):
@@ -14,27 +15,16 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CustomUser
-        fields = [
-            'phone_number', 'email', 'password', 
-            'confirm_password', 'user_type', 'no_of_peoples'
-        ]
+        fields = ['phone_number', 'email', 'password', 'confirm_password', 'user_type', 'no_of_peoples']
 
     def validate_phone_number(self, value):
         if CustomUser.objects.filter(phone_number=value).exists():
             raise serializers.ValidationError("Phone number already registered")
         return value
-    
+
     def validate_email(self, value):
         if CustomUser.objects.filter(email=value).exists():
             raise serializers.ValidationError("Email already registered")
-        return value
-
-    def validate_payment_method(self, value):
-        valid_methods = [choice[0] for choice in CustomUser.PAYMENT_METHOD]
-        if value not in valid_methods:
-            raise serializers.ValidationError(
-                f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
-            )
         return value
 
     def validate(self, data):
@@ -44,25 +34,11 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('confirm_password')
-        user = CustomUser.objects.create_user(**validated_data, is_active=False)
-        otp = str(random.randint(100000, 999999))
-
-        request = self.context.get("request")
-        if not request:
-            raise RuntimeError("Request must be passed in serializer context.")
-        request.session['otp'] = otp
-        request.session['otp_created_at'] = timezone.now().isoformat()
-        request.session['otp_type'] = 'register'
-        request.session['register_user_id'] = user.id
-        send_mail(
-            'Registration Confirmation OTP',
-            f'Your OTP code is {otp}.',
-            settings.DEFAULT_FROM_EMAIL,
-            [user.email],
-            fail_silently=False
+        user = CustomUser.objects.create_user(
+            **validated_data,
+            is_active=False
         )
         return user
-
 
 class UserLoginSerializer(serializers.Serializer):
     phone_number = serializers.CharField()
@@ -126,45 +102,24 @@ class UserSerializer(serializers.ModelSerializer):
         return value
 
 class OTPSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
     otp = serializers.CharField()
     otp_type = serializers.ChoiceField(choices=['register', 'reset_password'])
 
     def validate(self, data):
-        request = self.context.get('request')
-        if not request:
-            raise RuntimeError("Request context required")
+        user_id = data['user_id']
+        otp_type = data['otp_type']
+        otp_input = data['otp']
 
-        otp_type = data.get('otp_type')
-        session_type = request.session.get('otp_type')
-
-        if session_type != otp_type:
-            raise serializers.ValidationError("OTP type mismatch")
-
-        stored_otp = request.session.get('otp')
-        created_at = request.session.get('otp_created_at')
-
-        if not stored_otp or not created_at:
-            raise serializers.ValidationError("No OTP found. Please request a new one.")
-
-        otp_created_at = timezone.datetime.fromisoformat(created_at)
-        if timezone.now() > otp_created_at + timedelta(minutes=10):
-            request.session.pop('otp', None)
-            request.session.pop('otp_created_at', None)
-            request.session.pop('otp_type', None)
-            raise serializers.ValidationError("OTP expired. Please request another one.")
-
-        if data['otp'] == stored_otp:
-            request.session['otp_verified'] = True
-
-            data['user_id'] = request.session.get('register_user_id') if otp_type == 'register' else request.session.get('reset_user_id')
-            request.session.pop('otp', None)
-            request.session.pop('otp_created_at', None)
-            request.session.pop('otp_type', None)
-        else:
+        cache_key = f"otp:{otp_type}:{user_id}"
+        cached_data = cache.get(cache_key)
+        if not cached_data:
+            raise serializers.ValidationError("OTP expired or not found")
+        if cached_data['otp'] != otp_input:
             raise serializers.ValidationError("Invalid OTP")
-
+        cache.delete(cache_key)
+        data['verified'] = True
         return data
-
 
 class ResetPasswordRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
@@ -172,44 +127,37 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
     def validate_email(self, value):
         user = CustomUser.objects.filter(email=value).first()
         if not user:
-            raise serializers.ValidationError(
-                "Requested user email not available. Please check the email."
-            )
+            raise serializers.ValidationError("Requested user email not found.")
         otp = str(random.randint(100000, 999999))
-
-        request = self.context.get("request")
-        if not request:
-            raise RuntimeError("Request must be passed in serializer context.")
-        request.session['otp'] = otp
-        request.session['otp_created_at'] = timezone.now().isoformat()
-        request.session['otp_type'] = 'reset_password'
-        request.session['reset_user_id'] = user.id
+        cache_key = f"otp:reset_password:{user.id}"
+        cache.set(
+            cache_key,
+            {"otp": otp, "created_at": timezone.now().isoformat()},
+            timeout=300
+        )
+        from django.core.mail import send_mail
+        from django.conf import settings
         send_mail(
-            'Password reset OTP',
-            f'Your OTP code is {otp}.',
+            'Reset Password OTP',
+            f'Your OTP code is {otp}',
             settings.DEFAULT_FROM_EMAIL,
             [user.email],
             fail_silently=False
         )
-
+        self.user_id = user.id
         return value
 
-            
 
 class ResetPasswordSerializer(serializers.Serializer):
     new_password = serializers.CharField()
     confirm_password = serializers.CharField()
 
-    class ResetPasswordSerializer(serializers.Serializer):
-        new_password = serializers.CharField()
-        confirm_password = serializers.CharField()
+    def validate(self, data):
+        pass1 = data.get('new_password')
+        pass2 = data.get('confirm_password')
 
-        def validate(self, data):
-            pass1 = data.get('new_password')
-            pass2 = data.get('confirm_password')
+        if pass1 != pass2:
+            raise serializers.ValidationError("Password fields must match.")
 
-            if pass1 != pass2:
-                raise serializers.ValidationError("Password fields must match.")
-
-            return data
+        return data
 

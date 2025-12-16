@@ -23,7 +23,7 @@ config = Config(repository='officekhaja/.env')
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-mxwcfv-zk+hq-sp*^lucq__(=i&ir2ly3s_-gp3d6u=xuk=lzx'
+SECRET_KEY = config('SECRET_KEY')
 
 DEBUG = True
 
@@ -43,15 +43,18 @@ INSTALLED_APPS = [
     'rest_framework.authtoken',
     'rest_framework_simplejwt',
     'rest_framework_simplejwt.token_blacklist',
+    'corsheaders',
     'khaja',
     'orders',
     'users',
     'blog',
+    'chatapp',
     'notifications.apps.NotificationsConfig',
     'channels',
 ]
 
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware', 
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -84,7 +87,10 @@ ASGI_APPLICATION = 'officekhaja.asgi.application'
 
 CHANNEL_LAYERS = {
     'default': {
-        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            "hosts": [('127.0.0.1', 6379)],
+        },
     },
 }
 
@@ -163,8 +169,8 @@ MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 from datetime import timedelta
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME':  timedelta(days=int(os.getenv("ACCESS_TOKEN_LIFETIME"))),
+    'REFRESH_TOKEN_LIFETIME':  timedelta(days=int(os.getenv("ACCESS_TOKEN_LIFETIME"))),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'UPDATE_LAST_LOGIN': True,
@@ -185,6 +191,33 @@ SIMPLE_JWT = {
     
     'JTI_CLAIM': 'jti',
 }
+
+CORS_ALLOW_CREDENTIALS = True
+CORS_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:8000"
+]
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+]
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+        }
+    }
+}
+
 
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
