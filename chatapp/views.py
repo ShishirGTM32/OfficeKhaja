@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from .serializers import MessageSerializer, ConversationSerializer
 from .models import Message, Conversation
 from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated
 from .pagination import MessageInfiniteScrollPagination
 
 
@@ -45,7 +45,7 @@ class MessageView(APIView):
         if not (request.user.is_staff or conversation.user == request.user):
             return Response("You do not have access to this conversation", status=status.HTTP_403_FORBIDDEN)
 
-        messages = Message.objects.filter(conversation=conversation).order_by("-timestamp")
+        messages = Message.objects.filter(conversation=conversation).order_by("timestamp")
         pagination = MessageInfiniteScrollPagination()
         paginated = pagination.paginate_queryset(messages, request)
         serializer = MessageSerializer(paginated, many=True)

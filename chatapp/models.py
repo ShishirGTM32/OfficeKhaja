@@ -1,11 +1,11 @@
 from django.db import models
 from django.utils.text import slugify
 from users.models import CustomUser
-
+import uuid
 # Create your models here.
 
 class Conversation(models.Model):
-    cid = models.AutoField(primary_key=True)
+    cid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(CustomUser,on_delete=models.CASCADE,related_name="conversations")
     slug = models.SlugField(unique=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -38,4 +38,4 @@ class Message(models.Model):
         return self.message
     
     class Meta:
-        ordering=['-timestamp']
+        ordering=['timestamp']

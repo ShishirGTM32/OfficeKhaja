@@ -2,12 +2,19 @@ import asyncio
 import websockets
 import json
 
-JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzY1OTY5NTA5LCJpYXQiOjE3NjU4ODMxMDksImp0aSI6ImM3ZGVhMGU2MmY3ZTRjZGFhMzY2ZDE2MTVkMjBkOWI5IiwidXNlcl9pZCI6IjEyIn0.RZwHnF2w-u1SYKeu3BSdUkiD8QT89-Oyw4STEN-Zmb4"
-conversation_slug = "shishir-gautam-1"
-
 async def test_chat():
+    conversation_slug = "shishir-gautam-1"
+    JWT_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiZXhwIjoxNzY2MDMzMjQxLCJpYXQiOjE3NjU5NDY4NDEsImp0aSI6ImFhMDQ5M2EwNzQzZTQ4NjdiMjM1NTlhOWU3YjZiNjYyIiwidXNlcl9pZCI6IjEyIn0.NmiIqpBk7OBsS07rE8-ajcoi3SH2UcY1gtYlBT4WS84"
     uri = f"ws://localhost:8000/ws/chat/{conversation_slug}/?token={JWT_TOKEN}"
-
     async with websockets.connect(uri) as ws:
-        print("success")
+        message_data = {"type": "read"}
+        await ws.send(json.dumps(message_data))
+
+        try:
+            response = await asyncio.wait_for(ws.recv(), timeout=5)
+            print("Received:", response)
+        except asyncio.TimeoutError:
+            print("No response received within 5 seconds")
+        except websockets.exceptions.ConnectionClosedError:
+            print("Connection closed unexpectedly")
 asyncio.run(test_chat())
