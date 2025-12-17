@@ -23,7 +23,7 @@ class ConversationView(APIView):
 
     def post(self, request):
         if request.user.is_staff:
-            return Response("You cannot start a conversation", status=status.HTTP_403_FORBIDDEN)
+            return Response("You cannot start a conversation. Can only accept for reply.", status=status.HTTP_403_FORBIDDEN)
 
         existing_conv = Conversation.objects.filter(user=request.user).first()
         if existing_conv:
