@@ -8,6 +8,7 @@ from datetime import timedelta
 from .models import CustomUser, UserSubscription, Subscription
 from orders.permissions import IsStaff, IsSubscribedUser
 import random
+import secrets
 from django.core.mail import send_mail
 from django.conf import settings
 from django.core.cache import cache
@@ -52,29 +53,37 @@ class UserRegistrationView(APIView):
         serializer = UserRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
+
         otp = str(random.randint(100000, 999999))
-        cache_key = f"otp:register:{user.id}"
+
+        flow_key = secrets.token_urlsafe(16)
         cache.set(
-            cache_key,
-            {"otp": otp, "created_at": timezone.now().isoformat()},
-            timeout=300
+            f"otp_flow:{flow_key}",
+            {
+                "user_id": user.id,
+                "otp_type": "register",
+                "otp": otp,
+                "created_at": timezone.now().isoformat(),
+            },
+            timeout=300 
         )
 
         send_mail(
-            'Registration Confirmation OTP',
-            f'Your OTP code is {otp}',
-            settings.DEFAULT_FROM_EMAIL,
-            [user.email],
+            subject='Registration Confirmation OTP',
+            message=f'Your OTP code is {otp}',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
             fail_silently=False
         )
 
         tokens = get_tokens_for_user(user)
+
         return Response({
             'user': UserSerializer(user).data,
             'tokens': tokens,
+            'otp_token':flow_key,
             'is_admin': user.is_staff,
-            'message': 'User registered successfully. OTP sent to email.',
-            'user_id': user.id
+            'message': 'User registered successfully. OTP sent to email.'
         }, status=status.HTTP_201_CREATED)
 
 
@@ -272,6 +281,7 @@ class ResetPasswordRequestView(APIView):
         serializer = ResetPasswordRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         return Response({
+            "otp_token":serializer.flow_key,
             "detail": "Reset password OTP sent to your email.",
             "user_id": serializer.user_id
         }, status=status.HTTP_200_OK)
@@ -297,29 +307,58 @@ class ResendOTPView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        otp_type = request.data.get('otp_type')
-        user_id = request.data.get('user_id')
-
-        if otp_type not in ['register', 'reset_password'] or not user_id:
-            return Response({"error": "Invalid OTP flow"}, status=400)
-
-        cache_key = f"otp:{otp_type}:{user_id}"
-        otp = str(random.randint(100000, 999999))
-        cache.set(
-            cache_key,
-            {"otp": otp, "created_at": timezone.now().isoformat()},
-            timeout=300
-        )
+        otp_token = request.data.get("otp_token")
+        if not otp_token:
+            return Response(
+                {"error": "OTP token is required"},
+                status=400
+            )
+        flow_key = f"otp_flow:{otp_token}"
+        flow_data = cache.get(flow_key)
+        if not flow_data:
+            return Response(
+                {"error": "OTP session expired or invalid"},
+                status=400
+            )
+        user_id = flow_data.get("user_id")
+        otp_type = flow_data.get("otp_type")
+        if otp_type not in ["register", "reset_password"]:
+            return Response(
+                {"error": "Invalid OTP flow"},
+                status=400
+            )
         try:
             user = CustomUser.objects.get(id=user_id)
         except CustomUser.DoesNotExist:
-            return Response({"error": "User not found"}, status=404)
-        send_mail(
-            'Your OTP Code',
-            f'Your OTP code is {otp}',
-            settings.DEFAULT_FROM_EMAIL,
-            [user.email],
-            fail_silently=False
+            return Response(
+                {"error": "User not found"},
+                status=404
+            )
+        cache.delete(flow_key)
+
+        otp = str(random.randint(100000, 999999))
+
+        cache.set(
+            flow_key,
+            {
+                "user_id": user.id,
+                "otp_type": otp_type,
+                "otp": otp,
+                "created_at": timezone.now().isoformat()
+            },
+            timeout=300
         )
 
-        return Response({"detail": f"{otp_type.capitalize()} OTP resent successfully"}, status=200)
+
+        send_mail(
+            subject="Your OTP Code",
+            message=f"Your OTP code is {otp}",
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False,
+        )
+
+        return Response(
+            {"detail": f"{otp_type.replace('_', ' ').title()} OTP resent successfully"},
+            status=200
+        )

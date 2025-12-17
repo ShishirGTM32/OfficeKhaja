@@ -4,7 +4,7 @@ from django.core.mail import send_mail
 from django.utils.timezone import now, timedelta
 from .models import CustomUser, Subscription, UserSubscription
 from django.conf import settings
-import random
+import random, secrets
 from django.utils import timezone
 from django.core.cache import cache
 
@@ -102,23 +102,25 @@ class UserSerializer(serializers.ModelSerializer):
         return value
 
 class OTPSerializer(serializers.Serializer):
-    user_id = serializers.IntegerField()
+    otp_token = serializers.CharField() 
     otp = serializers.CharField()
-    otp_type = serializers.ChoiceField(choices=['register', 'reset_password'])
 
     def validate(self, data):
-        user_id = data['user_id']
-        otp_type = data['otp_type']
+        otp_token = data['otp_token']
         otp_input = data['otp']
 
-        cache_key = f"otp:{otp_type}:{user_id}"
+        cache_key = f"otp_flow:{otp_token}"
         cached_data = cache.get(cache_key)
+
         if not cached_data:
             raise serializers.ValidationError("OTP expired or not found")
+
         if cached_data['otp'] != otp_input:
             raise serializers.ValidationError("Invalid OTP")
         cache.delete(cache_key)
         data['verified'] = True
+        data['user_id'] = cached_data['user_id']
+        data['otp_type'] = cached_data['otp_type']
         return data
 
 class ResetPasswordRequestSerializer(serializers.Serializer):
@@ -129,14 +131,20 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
         if not user:
             raise serializers.ValidationError("Requested user email not found.")
         otp = str(random.randint(100000, 999999))
-        cache_key = f"otp:reset_password:{user.id}"
+
+        
+        flow_key = secrets.token_urlsafe(16)
         cache.set(
-            cache_key,
-            {"otp": otp, "created_at": timezone.now().isoformat()},
+            f"otp_flow:{flow_key}",
+            {
+                "user_id": user.id,
+                "otp_type": "reset_password",
+                "otp": otp,
+                "created_at": timezone.now().isoformat()
+            },
             timeout=300
         )
-        from django.core.mail import send_mail
-        from django.conf import settings
+
         send_mail(
             'Reset Password OTP',
             f'Your OTP code is {otp}',
@@ -145,6 +153,7 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
             fail_silently=False
         )
         self.user_id = user.id
+        self.flow_key = flow_key
         return value
 
 
