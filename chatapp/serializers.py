@@ -36,7 +36,7 @@ class ConversationSerializer(serializers.ModelSerializer):
     class Meta:
         model = Conversation
         fields = ['cid', 'user', 'user_details', 'slug', 'created_at', 'last_message']
-        read_only_fields = ['cid', 'created_at', 'slug', 'last_message']
+        read_only_fields = ['cid', 'created_at', 'slug', 'last_message', 'user']
     
     def get_last_message(self, obj):
         last_msg = Message.objects.filter(conversation=obj).order_by('-timestamp').first()

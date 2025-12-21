@@ -1,5 +1,4 @@
 import json
-import asyncio
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from asgiref.sync import sync_to_async
@@ -23,7 +22,7 @@ class ConnectionCounter:
     def __init__(self, user_id, is_staff=False):
         self.user_id = str(user_id)
         self.key = f"user:{self.user_id}:connections"
-        self.online_set = "online_staff" if is_staff else "online_users"
+        self.online_set = "online"
         self.is_staff = is_staff
 
     @sync_to_async
@@ -87,7 +86,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if not self.user or not self.user.is_authenticated:
                 logger.warning("Unauthenticated connection attempt")
                 await self.close(code=4001)
-                return
+                return  
 
             self.cid = self.scope["url_route"]["kwargs"].get("conversation_id")
             if not self.cid:
@@ -168,6 +167,9 @@ class ChatConsumer(AsyncWebsocketConsumer):
             msg_type = data.get("type")
 
             if msg_type == "chat_message":
+                messages = await self.get_unread_messages()
+                if messages:
+                    await self.handle_read_receipt(data)
                 await self.handle_chat_message(data)
             elif msg_type == "read":
                 await self.handle_read_receipt(data)
@@ -187,12 +189,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
             return
 
         try:
-            message = await self.save_message(text)
-            
+            message = await self.save_message(text)            
             recipient_id = await self.get_recipient_id()
             recipient_counter = ConnectionCounter(recipient_id, not self.user.is_staff)
             recipient_online = await recipient_counter.is_online()
-
             sender_details = await self.get_sender_details()
 
             payload = {
@@ -205,11 +205,11 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "is_read": False,
                 "recipient_online": recipient_online
             }
-
-            await self.channel_layer.group_send(self.room_name, {
-                "type": "chat_message_handler",
-                **payload
-            })
+            if recipient_online:
+                await self.channel_layer.group_send(self.room_name, {
+                    "type": "chat_message_handler",
+                    **payload
+                })
 
         except Exception as e:
             logger.error(f"Error handling chat message: {e}", exc_info=True)
@@ -247,6 +247,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             )
         except Exception as e:
             logger.error(f"Error handling typing indicator: {e}", exc_info=True)
+
 
     async def chat_message_handler(self, event):
         await self.send(text_data=json.dumps({
@@ -289,16 +290,12 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def send_online_list(self):
         try:
             if redis_instance:
-                if self.user.is_staff:
-                    online_ids = await sync_to_async(redis_instance.smembers)("online_users")
-                else:
-                    online_ids = await sync_to_async(redis_instance.smembers)("online_staff")
+                online_ids = await sync_to_async(redis_instance.smembers)("online")
 
                 online_ids = [id.decode() if isinstance(id, bytes) else str(id) for id in online_ids]
                 users = await self.get_users_by_ids(online_ids)
             else:
                 users = []
-
             await self.send(text_data=json.dumps({
                 "type": "online_users",
                 "users": [

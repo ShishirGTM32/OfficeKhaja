@@ -2,7 +2,6 @@ from django.db import models
 from django.utils.text import slugify
 from users.models import CustomUser
 import uuid
-# Create your models here.
 
 class Conversation(models.Model):
     cid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -37,5 +36,3 @@ class Message(models.Model):
     def __str__(self):
         return self.message
     
-    class Meta:
-        ordering=['-timestamp']

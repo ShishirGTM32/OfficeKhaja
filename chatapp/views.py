@@ -13,11 +13,14 @@ class ConversationView(APIView):
     permission_classes = [IsAuthenticated]
     
     def get(self, request):
+        
         if request.user.is_staff:
             conversations = Conversation.objects.filter(
                 Exists(Message.objects.filter(conversation=OuterRef('pk')))
             ).select_related('user').order_by('-created_at')
-            
+            id = request.query_params.get("id", None)
+            if id:
+                conversations = Conversation.objects.filter(cid=id)
             data = []
             for conv in conversations:
                 conv_data = ConversationSerializer(conv).data
@@ -25,13 +28,16 @@ class ConversationView(APIView):
                 data.append(conv_data)
             return Response(data, status=status.HTTP_200_OK)
         else:
+            id = request.query_params.get("id", None)
+            if id:
+                return Response("Unable to retrieve through id.")
             conversation = Conversation.objects.filter(
                 user=request.user
             ).filter(
                 Exists(Message.objects.filter(conversation=OuterRef('pk')))
             ).first()
-            
-            if not conversation:
+
+            if not conversation:    
                 return Response(
                     {"detail": "No conversation started yet"}, 
                     status=status.HTTP_404_NOT_FOUND
@@ -82,9 +88,7 @@ class MessageView(APIView):
         if search_query:
             messages = messages.filter(Q(message__icontains=search_query))
         
-        messages = messages.order_by("timestamp")
-        
-
+        messages = messages.order_by("-timestamp")
         pagination = MessageInfiniteScrollPagination()
         paginated = pagination.paginate_queryset(messages, request)
         serializer = MessageSerializer(paginated, many=True)

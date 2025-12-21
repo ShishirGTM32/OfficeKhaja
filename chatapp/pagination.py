@@ -1,12 +1,8 @@
-from rest_framework.pagination import LimitOffsetPagination, CursorPagination
+from rest_framework.pagination import CursorPagination
 
-# class MessageInfiniteScrollPagination(LimitOffsetPagination):
-#     default_limit = 35
-#     limit_query_param = 'limit'
-#     offset_query_param = 'offset'
 
 class MessageInfiniteScrollPagination(CursorPagination):
-    default_limit = 10
-    ordering = '-timestamp'
+    page_size = 15  
+    ordering =  ('-timestamp', '-conversation_id') 
     cursor_query_param = 'cursor'
 
