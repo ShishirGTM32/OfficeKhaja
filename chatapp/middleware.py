@@ -1,50 +1,45 @@
-import jwt
-from urllib.parse import parse_qs
 from channels.db import database_sync_to_async
-from django.contrib.auth import get_user_model
+from channels.middleware import BaseMiddleware
 from django.contrib.auth.models import AnonymousUser
-from rest_framework_simplejwt.tokens import UntypedToken
-from rest_framework_simplejwt.exceptions import InvalidToken, TokenError
-from django.conf import settings
+from rest_framework_simplejwt.tokens import AccessToken
+from users.models import CustomUser
+import logging
 
-User = get_user_model()
-
-
-@database_sync_to_async
-def get_user_from_jwt(token):
-    try:
-        UntypedToken(token)
-
-        payload = jwt.decode(
-            token,
-            settings.SECRET_KEY,
-            algorithms=["HS256"],
-        )
-
-        user_id = payload.get("user_id")
-        return User.objects.get(id=user_id)
-
-    except (InvalidToken, TokenError, User.DoesNotExist, jwt.DecodeError):
-        return AnonymousUser()
+logger = logging.getLogger(__name__)
 
 
-
-class JwtAuthMiddleware:
-    def __init__(self, app):
-        self.app = app 
+class JWTAuthMiddleware(BaseMiddleware):
 
     async def __call__(self, scope, receive, send):
-        
-        scope["user"] = AnonymousUser()
-
-        
         query_string = scope.get("query_string", b"").decode()
-        params = parse_qs(query_string)
-        token_list = params.get("token")
-        token = token_list[0] if token_list else None
+        token = None
+        
+        for param in query_string.split("&"):
+            if param.startswith("token="):
+                token = param.split("=")[1]
+                break
 
         if token:
-            user = await get_user_from_jwt(token)
-            scope["user"] = user
+            try:
+                access_token = AccessToken(token)
+                user_id = access_token['user_id']
+                
+                scope['user'] = await self.get_user(user_id)
+            except Exception as e:
+                logger.error(f"JWT validation error: {e}")
+                scope['user'] = AnonymousUser()
+        else:
+            scope['user'] = AnonymousUser()
 
-        return await self.app(scope, receive, send)
+        return await super().__call__(scope, receive, send)
+
+    @database_sync_to_async
+    def get_user(self, user_id):
+        try:
+            return CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            return AnonymousUser()
+
+
+def JWTAuthMiddlewareStack(inner):
+    return JWTAuthMiddleware(inner)
