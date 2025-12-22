@@ -1,9 +1,10 @@
 # orders/models.py
 from django.db import models
-from khaja.models import Meals, Combo, CustomMeal
+from khaja.models import Meals, Combo, CustomMeal, DeliveryTimeSlot
 from users.models import CustomUser
 from decimal import Decimal
 from datetime import datetime
+import uuid
 
 class Order(models.Model):
     STATUS_CHOICES = [
@@ -20,6 +21,7 @@ class Order(models.Model):
         ("CARD", "Card"),
     ]
 
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='orders')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -30,9 +32,6 @@ class Order(models.Model):
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='PENDING')
     payment_method = models.CharField(max_length=255, choices=PAYMENT_METHOD)
     delivery_address = models.TextField()
-
-    class Meta:
-        ordering = ['-created_at']
 
     def calculate_pricing(self):
         subtotal = sum(item.get_total_price() for item in self.order_items.all())
@@ -54,20 +53,7 @@ class Order(models.Model):
 
 
 class OrderItem(models.Model):
-    DELIVERY_TIME_SLOTS = [
-        ("MORNING_BREAKFAST", "Morning Breakfast"),
-        ("LUNCH", "Lunch"),
-        ("EVENING_SNACK", "Evening Snack"),
-        ("DINNER", "Dinner"),
-    ]
-    
-    TIME_SLOT_RANGES = {
-        "MORNING_BREAKFAST": ("07:00", "10:00"),
-        "LUNCH": ("11:00", "14:30"),
-        "EVENING_SNACK": ("15:00", "18:00"),
-        "DINNER": ("18:30", "22:00"),
-    }
-    
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)   
     order = models.ForeignKey(Order, related_name='order_items', on_delete=models.CASCADE)
     meals = models.ForeignKey(Meals, on_delete=models.CASCADE, null=True, blank=True)
     meal_type = models.CharField(max_length=20)
@@ -82,46 +68,26 @@ class OrderItem(models.Model):
     
 
     def __str__(self):
-        return f"{self.meals.name} x {self.quantity} for Order #{self.order.id}"
+        return f"{self.meals.name} x {self.quantity} for Order #{self.order.uuid}"
 
 
     class Meta:
-        ordering = ['id']
+        ordering = ['uuid']
 
 
 class ComboOrderItem(models.Model):
-    SUBSCRIPTION_PLAN = [
-        ("WEEKLY", "Weekly Plan"),
-        ("MONTHLY", "Monthly Plan"),
-        ("YEARLY", "Yearly Plan")
-    ]
-    
-    TIME_SLOT_RANGES = {
-        "MORNING_BREAKFAST": ("07:00", "10:00"),
-        "LUNCH": ("11:00", "14:30"),
-        "EVENING_SNACK": ("15:00", "18:00"),
-        "DINNER": ("18:30", "22:00"),
-    }
-    
+    uuid = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)   
     order = models.ForeignKey(Order, related_name='combo_items', on_delete=models.CASCADE)
     combo = models.ForeignKey(CustomMeal, on_delete=models.CASCADE)
-    subscription_plan = models.CharField(max_length=20, choices=SUBSCRIPTION_PLAN)
     delivery_from_date = models.DateField()
     delivery_to_date = models.DateField()
-    delivery_time = models.TimeField(null=True, blank=True)
+    delivery_time_slot = models.ForeignKey(DeliveryTimeSlot, on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
     preferences = models.TextField(blank=True)
     price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
     
     def get_total_price(self):
         return self.price_snapshot * Decimal(self.quantity)
-    
-    def get_formatted_delivery_time(self):
-        if self.delivery_time and self.delivery_from_date:
-            date_str = self.delivery_from_date.strftime('%d %b %Y')
-            time_str = self.delivery_time.strftime('%I:%M %p')
-            return f"{date_str}, {time_str}"
-        return ""
     
     def __str__(self):
         return f"Combo #{self.combo.combo_id} ({self.subscription_plan}) for Order #{self.order.id}"
@@ -179,7 +145,7 @@ class CartItem(models.Model):
 
     def __str__(self):
         if self.custom_meal:
-            return f"Custom Meal ({self.custom_meal.category}) x {self.quantity}"
+            return f"Custom Meal ({self.custom_meal.meal_category}) x {self.quantity}"
         elif self.meals:
             return f"{self.meals.name} x {self.quantity}"
         return f"Empty cart item"
