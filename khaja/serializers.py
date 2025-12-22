@@ -8,13 +8,13 @@ from .models import (Meals, Nutrition, CustomMeal, Combo, Ingredient,
 class TypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = Type
-        fields = ['type_id', 'type_name']
+        fields = ['type_id', 'type_name', 'slug']
 
 
 class MealCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = MealCategory
-        fields = ['cat_id', 'category']
+        fields = ['cat_id', 'category', 'slug']
 
 
 class DeliveryTimeSlotSerializer(serializers.ModelSerializer):
@@ -22,7 +22,7 @@ class DeliveryTimeSlotSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = DeliveryTimeSlot
-        fields = ['slot_id', 'name', 'display_name', 'start_time', 'end_time', 'time_range', 'is_active', 'order']
+        fields = ['slot_id', 'name', 'display_name', 'start_time', 'end_time', 'time_range', 'is_active', 'slug']
 
 
 class IngredientSerializer(serializers.ModelSerializer):
@@ -50,6 +50,15 @@ class NutritionSerializer(serializers.ModelSerializer):
         fields = ['nid', 'energy', 'protein', 'carbs', 'fats', 'sugar']
         read_only_fields = ['nid']
 
+class MealListSerializer(serializers.ModelSerializer):
+    nutrition = NutritionSerializer(read_only=True)
+    
+    class Meta:
+        model = Meals
+        fields = ['meal_id', 'name', 'description','slug', 'price', 'image', 'weight', 'nutrition', 'is_available']
+        read_only_fields = ['meal_id', 'slug']
+
+
 
 class MealSerializer(serializers.ModelSerializer):
     nutrition = NutritionSerializer(read_only=True)
@@ -73,7 +82,7 @@ class MealSerializer(serializers.ModelSerializer):
 
 
 class ComboSerializer(serializers.ModelSerializer):
-    meals = MealSerializer(many=True, read_only=True)
+    meals = MealListSerializer(many=True, read_only=True)
     meal_count = serializers.SerializerMethodField()
     total_price = serializers.SerializerMethodField()
     total_nutrition = serializers.SerializerMethodField()
@@ -103,11 +112,11 @@ class CustomMealListSerializer(serializers.ModelSerializer):
     meal_count = serializers.SerializerMethodField()
     total_price = serializers.SerializerMethodField()
     formatted_delivery_time = serializers.CharField(source='get_formatted_delivery_time', read_only=True)
-    subscription_plan_name = serializers.CharField(source='subscription_plan.name', read_only=True)
+    subscription_plan_name = serializers.CharField(source='subscription_plan.plan.subscription', read_only=True)
 
     class Meta:
         model = CustomMeal
-        fields = ['combo_id', 'type', 'type_name', 'meal_category', 'category_name', 
+        fields = ['combo_id','public_id', 'type', 'type_name', 'meal_category', 'category_name', 
                   'no_of_servings', 'meal_count', 'total_price', 'delivery_time_slot',
                   'delivery_slot_name', 'formatted_delivery_time', 'subscription_plan_name', 
                   'is_active', 'created_at']
@@ -128,27 +137,23 @@ class CustomMealSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='meal_category.category', read_only=True)
     delivery_slot = DeliveryTimeSlotSerializer(source='delivery_time_slot', read_only=True)
     formatted_delivery_time = serializers.CharField(source='get_formatted_delivery_time', read_only=True)
-    subscription_plan_name = serializers.CharField(source='subscription_plan.name', read_only=True)
+    subscription_plan_name = serializers.CharField(source='subscription_plan.plan.subscription', read_only=True)
 
     class Meta:
         model = CustomMeal
-        fields = ['combo_id', 'user', 'user_name', 'type', 'type_name', 'meal_category', 
+        fields = ['combo_id', 'user', 'user_name', 'public_id', 'type', 'type_name', 'meal_category', 
                   'category_name', 'no_of_servings', 'preferences', 'delivery_time_slot',
-                  'delivery_slot', 'delivery_time', 'formatted_delivery_time', 
+                  'delivery_slot', 'delivery_date', 'formatted_delivery_time', 
                   'delivery_address', 'meal_ids', 'meals', 'total_price', 'is_active', 
                   'created_at', 'subscription_plan', 'subscription_plan_name']
         read_only_fields = ['combo_id', 'user', 'created_at', 'subscription_plan']
 
-    def validate_delivery_time(self, value):
-        if value and value < timezone.now():
-            raise serializers.ValidationError("Delivery time cannot be in the past")
-        return value
 
     def validate(self, data):
         meal_ids = data.get('meal_ids', [])
         meal_category = data.get('meal_category')
         meal_type = data.get('type')
-        delivery_time = data.get('delivery_time')
+        delivery_date = data.get('delivery_date')
         delivery_slot = data.get('delivery_time_slot')
         
         if not meal_ids:
@@ -181,26 +186,16 @@ class CustomMealSerializer(serializers.ModelSerializer):
                 'meal_ids': f'All meals must be "{type_name}" type. Invalid meals: {mismatched_names}'
             })
         
-        if delivery_time and delivery_slot:
+        if delivery_date and delivery_slot:
             if not delivery_slot.is_active:
                 raise serializers.ValidationError({
                     'delivery_time_slot': 'Selected delivery time slot is not available'
                 })
             
-            if not delivery_slot.is_time_in_slot(delivery_time):
-                time_range = delivery_slot.get_time_range()
-                raise serializers.ValidationError({
-                    'delivery_time': f'Delivery time must be within the slot range: {time_range}'
-                })
         
-        if delivery_time and not delivery_slot:
+        if delivery_slot and not delivery_date:
             raise serializers.ValidationError({
-                'delivery_time_slot': 'Delivery time slot is required when delivery time is provided'
-            })
-        
-        if delivery_slot and not delivery_time:
-            raise serializers.ValidationError({
-                'delivery_time': 'Delivery time is required when delivery time slot is provided'
+                'delivery_time': 'Delivery date is required with delivery slot is provided'
             })
         
         delivery_address = data.get('delivery_address', '').strip()
@@ -208,7 +203,7 @@ class CustomMealSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'delivery_address': 'Delivery address is required'
             })
-        
+
         return data
 
     def get_total_price(self, obj):

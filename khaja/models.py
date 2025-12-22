@@ -4,36 +4,63 @@ from django.contrib.postgres.fields import ArrayField
 from users.models import UserSubscription
 from django.utils.text import slugify
 from datetime import datetime, time
+import uuid
 
 
 class Type(models.Model):
     type_id = models.AutoField(primary_key=True)
+    slug = models.SlugField(unique=True)
     type_name = models.CharField(max_length=100, null=False)
 
     def __str__(self):
         return self.type_name
+    
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            super().save(*args, **kwargs)
+            self.slug = slugify(self.type_name)
+            kwargs['force_insert'] = False
+            super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 
 class MealCategory(models.Model):
     cat_id = models.AutoField(primary_key=True)
+    slug = models.SlugField(unique=True)
     category = models.CharField(max_length=30)
 
     def __str__(self):
         return self.category
+    
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            super().save(*args, **kwargs)
+            self.slug = slugify(self.category)
+            kwargs['force_insert'] = False
+            super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
 
 class DeliveryTimeSlot(models.Model):
     slot_id = models.AutoField(primary_key=True)
+    slug = models.SlugField(unique=True, blank=True)
     name = models.CharField(max_length=50, unique=True)
     display_name = models.CharField(max_length=100)
     start_time = models.TimeField()
     end_time = models.TimeField()
     is_active = models.BooleanField(default=True)
-    order = models.IntegerField(default=0, help_text="Display order")
 
     class Meta:
-        ordering = ['order', 'start_time']
+        ordering = ['start_time']
         verbose_name_plural = "Delivery Time Slots"
+        constraints = [
+            models.UniqueConstraint(fields=['start_time', 'end_time'], name='unique_time_slot')
+        ]
+        indexes = [
+            models.Index(fields=['start_time', 'end_time'])
+        ]
 
     def __str__(self):
         return f"{self.display_name} ({self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')})"
@@ -46,6 +73,10 @@ class DeliveryTimeSlot(models.Model):
             check_time = check_time.time()
         return self.start_time <= check_time <= self.end_time
 
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            self.slug = slugify(self.name)
+        super().save(*args, **kwargs)
 
 class Meals(models.Model):
     meal_id = models.AutoField(primary_key=True)
@@ -78,11 +109,22 @@ class Meals(models.Model):
 
 class Ingredient(models.Model):
     id = models.AutoField(primary_key=True)
+    slug = models.SlugField(unique=True)
     name = models.CharField(max_length=100, unique=True)
     category = models.CharField(max_length=50, blank=True, null=True)
     
     def __str__(self):
         return self.name
+
+    def save(self, *args, **kwargs):
+        if not self.slug:
+            super().save(*args, **kwargs)
+            base_slug = slugify(self.name)
+            self.slug = f"{base_slug}"
+            kwargs['force_insert'] = False
+            super().save(*args, **kwargs)
+        else:
+            super().save(*args, **kwargs)
 
     class Meta:
         verbose_name_plural = "Ingredients"
@@ -154,9 +196,15 @@ class Combo(models.Model):
     class Meta:
         verbose_name_plural = "Combos"
 
+def generate_unique_uuid():
+    while True:
+        new_uuid = uuid.uuid4()
+        if not CustomMeal.objects.filter(public_id=new_uuid).exists():
+            return new_uuid
 
 class CustomMeal(models.Model):
     combo_id = models.AutoField(primary_key=True)
+    public_id = models.UUIDField(default=generate_unique_uuid, editable=False, null=True)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='custom_users')
     meals = models.ForeignKey(Combo, on_delete=models.CASCADE, null=True, related_name='custom_meals')
     type = models.ForeignKey(Type, on_delete=models.CASCADE)
@@ -164,8 +212,8 @@ class CustomMeal(models.Model):
     no_of_servings = models.IntegerField(default=1, help_text="Number of people")
     preferences = models.TextField(blank=True)
     subscription_plan = models.ForeignKey(UserSubscription, on_delete=models.CASCADE, null=True)
-    delivery_time_slot = models.ForeignKey(DeliveryTimeSlot, on_delete=models.SET_NULL, null=True, blank=True, help_text="Preferred delivery time window")
-    delivery_time = models.DateTimeField(null=True, blank=True, help_text="Specific delivery date and time")
+    delivery_time_slot = models.ForeignKey(DeliveryTimeSlot, on_delete=models.CASCADE,help_text="Preferred delivery time window")
+    delivery_date = models.DateField(null=True, blank=True, help_text="Specific delivery date")
     delivery_address = models.TextField(blank=True, help_text="Delivery address for this meal")
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
@@ -177,10 +225,10 @@ class CustomMeal(models.Model):
         return 0
     
     def get_formatted_delivery_time(self):
-        if self.delivery_time and self.delivery_time_slot:
-            date_str = self.delivery_time.strftime('%d %b %Y')
+        if self.delivery_date and self.delivery_time_slot:
+            formatted_date = self.delivery_date.strftime('%d %b %Y')
             time_range = self.delivery_time_slot.get_time_range()
-            return f"{date_str}, ({time_range})"
+            return f"{formatted_date}, ({time_range})"
         return ""
 
     def __str__(self):

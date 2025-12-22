@@ -3,7 +3,7 @@ from .views import (
     MealListView, MealDetailView, MealIngredientsView,
     NutritionView, CustomMealListView, CustomMealDetailView,
     IngredientView, TypeListView, MealCategoryListView,
-    DeliveryTimeSlotListView, CustomMealCreateView, CustomMealPreviewView,
+    DeliveryTimeSlotListView, CustomMealCreateView,
     DeliveryTimeFormatter
 )
 
@@ -19,9 +19,8 @@ urlpatterns = [
     path('meals/<slug:slug>/', MealDetailView.as_view(), name='meal-detail'),
     path('meals/<slug:slug>/ingredients/', MealIngredientsView.as_view(), name='meal-ingredients'),
     path('meals/<slug:slug>/nutrition/', NutritionView.as_view(), name='meal-nutrition'),
-    path('my/custom-meals/', CustomMealListView.as_view(), name='my-custom-meals'),
-    path('my/custom-meals/<int:combo_id>/', CustomMealDetailView.as_view(), name='my-custom-meal-detail'),
+    path('custom-meals/', CustomMealListView.as_view(), name='my-custom-meals'),
+    path('custom-meals/<uuid:combo_id>/', CustomMealDetailView.as_view(), name='my-custom-meal-detail'),
     path('create-meal/', CustomMealCreateView.as_view(), name='create-custom-meal'),
-    path('create-meal/preview/', CustomMealPreviewView.as_view(), name='preview-custom-meal'),
     path('format-delivery-time/', DeliveryTimeFormatter.as_view(), name='format-delivery-time'),
 ]

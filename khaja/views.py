@@ -7,13 +7,16 @@ from django.http import Http404
 from .models import (Meals, CustomMeal, Nutrition, Combo, Ingredient, DeliveryTimeSlot,
                      MealIngredient, Type, MealCategory)
 from .pagination import MenuInfiniteScrollPagination, MealsPagination
-from users.models import CustomUser, UserSubscription
+from users.models import CustomUser, UserSubscription, Subscription
 from users.views import check_subscription
+from django.utils import timezone
+import datetime
+from datetime import timedelta
 from orders.models import ComboOrderItem
 from orders.permissions import IsSubscribedUser, IsStaff
 from .serializers import (
     MealSerializer, CustomMealSerializer, CustomMealListSerializer,
-    NutritionSerializer, ComboSerializer, IngredientSerializer, 
+    NutritionSerializer, IngredientSerializer, 
     MealIngredientSerializer, TypeSerializer, MealCategorySerializer, DeliveryTimeSlotSerializer
 )
 
@@ -31,10 +34,25 @@ class DeliveryTimeSlotListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        slots = DeliveryTimeSlot.objects.filter(is_active=True)
-        serializer = DeliveryTimeSlotSerializer(slots, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        days_ahead = int(request.GET.get('days', 7))
+        today = timezone.localdate()
+        slots = DeliveryTimeSlot.objects.filter(is_active=True).order_by('start_time')
 
+        combined_slots = []
+        for day_offset in range(days_ahead):
+            date = today + timedelta(days=day_offset)
+            for slot in slots:
+                if date == today and slot.end_time <= timezone.now().time():
+                    continue
+
+                combined_slots.append({
+                    "id": f"{date}_{slot.slot_id}", 
+                    "delivery_date": str(date),
+                    "slot_id": slot.slot_id,
+                    "display": f"{date.strftime('%d %b')} ({slot.start_time.strftime('%H:%M')} - {slot.end_time.strftime('%H:%M')})"
+                })
+
+        return Response(combined_slots, status=status.HTTP_200_OK)
 
 class MealCategoryListView(APIView):
     permission_classes = [AllowAny]
@@ -56,7 +74,7 @@ class IngredientView(APIView):
     def get(self, request, pk=None):
         if pk:
             try:
-                ingredient = get_object_or_404(Ingredient, pk=pk)
+                ingredient = get_object_or_404(Ingredient, slug=pk)
             except Http404:
                 return Response({"error": "Invalid ingredient id"}, status=status.HTTP_404_NOT_FOUND)
             serializer = IngredientSerializer(ingredient)
@@ -302,8 +320,8 @@ class CustomMealCreateView(APIView):
             }, status=status.HTTP_200_OK)
         
         elif step == '2':
-            type_id = request.query_params.get('type')
-            category_id = request.query_params.get('category')
+            type_id = request.session['type']
+            category_id = request.session['category']
             
             if not type_id or not category_id:
                 return Response({'error': 'Type and category are required'}, status=status.HTTP_400_BAD_REQUEST)
@@ -348,16 +366,16 @@ class CustomMealCreateView(APIView):
             subscription_plans = []
             for sub in subscriptions:
                 subscription_plans.append({
-                    'id': sub.id,
-                    'name': sub.plan.subscription.name,
-                    'duration': sub.plan.subscription.duration_days,
+                    'id': sub.sub_id,
+                    'name': sub.plan.subscription,
+                    'duration': sub.plan.duration_days,
                     'is_active': True
                 })
             
             if not subscription_plans:
                 subscription_plans = [{'id': None, 'name': 'No active subscription', 'is_active': False}]
-            
-            default_address = str(request.user.street_address) if request.user.street_address else 'New Baneshwor, Kathmandu'
+            delivery_address = request.data.get('delivery_address')
+            default_address = str(request.user.street_address) if request.user.street_address else delivery_address
             
             return Response({
                 'step': 3,
@@ -379,7 +397,48 @@ class CustomMealCreateView(APIView):
         if check_subscription(request.user):
             return Response({'error': 'Subscription not renewed'}, status=status.HTTP_403_FORBIDDEN)
         
-        serializer = CustomMealSerializer(data=request.data, context={'request': request})
+        step = request.query_params.get('step', '1')
+        
+        if step == '1':
+            type = request.data.get('type')
+            category = request.data.get('category')
+            servings = request.data.get('servings')
+            preferences = request.data.get('preferences')
+            if not type and not category and not servings and not preferences:
+                return Response("type, category, servings and preferences field are required", status=status.HTTP_400_BAD_REQUEST)
+            if not Type.objects.filter(type_id=type).first():
+                return Response("invalid type name. Enter valid type name", status=status.HTTP_404_NOT_FOUND)
+            if not MealCategory.objects.filter(cat_id=category).first():
+                return Response("invalid category name. Enter valid category name", status=status.HTTP_404_NOT_FOUND)
+            request.session['type'] = type
+            request.session['category'] = category
+            request.session['servings'] = servings
+            request.session['preferences'] = preferences
+            return Response("Post request success.",status=status.HTTP_200_OK)
+        elif step == '2':
+            meal_ids = request.data.get('meal_ids')
+            meals = Meals.objects.filter(meal_id__in=meal_ids)
+            if meals.count() != len(meal_ids):
+                return Response("Invalid meal id presented", status=status.HTTP_404_NOT_FOUND)
+            request.session['meal_ids'] = meal_ids
+            return Response("post request success.",status=status.HTTP_200_OK)
+        elif step == '3':
+            street_address = request.user.street_address
+            delivery_date = request.data.get('delivery_date')
+            delivery_address = request.data.get('delivery_address') 
+            if not delivery_address:
+                delivery_address=street_address
+            data = {
+                'type':request.session['type'],
+                'meal_category':request.session['category'],
+                'no_of_servings':request.session['servings'],
+                'preferences':request.session['preferences'],
+                'meal_ids': request.session['meal_ids'],
+                'delivery_address':delivery_address,
+                'delivery_date':delivery_date,
+                'delivery_time_slot':request.data.get('delivery_time_slot'),
+            }
+        serializer = CustomMealSerializer(data=data, context={'request': request})
         
         if serializer.is_valid():
             meal_ids = serializer.validated_data.pop('meal_ids')
@@ -392,11 +451,12 @@ class CustomMealCreateView(APIView):
             combo.meals.set(meals)
             
             subscription = UserSubscription.objects.filter(user=request.user).first()
-            
+            sub = Subscription.objects.get(sid=subscription.plan.sid)
+            print(sub.sid)
             custom_meal = CustomMeal.objects.create(
                 user=request.user,
                 meals=combo,
-                subscription_plan=subscription.plan.subscription if subscription else None,
+                subscription_plan=subscription,
                 **serializer.validated_data
             )
             
@@ -406,110 +466,6 @@ class CustomMealCreateView(APIView):
             return Response(response_data, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class CustomMealPreviewView(APIView):
-    permission_classes = [IsAuthenticated, IsSubscribedUser]
-
-    def post(self, request):
-        type_id = request.data.get('type')
-        category_id = request.data.get('meal_category')
-        meal_ids = request.data.get('meal_ids', [])
-        no_of_servings = request.data.get('no_of_servings', 1)
-        preferences = request.data.get('preferences', '')
-        delivery_time_slot = request.data.get('delivery_time_slot')
-        
-        if not meal_ids:
-            return Response({'error': 'No meals selected'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            meal_type = Type.objects.get(type_id=type_id)
-            category = MealCategory.objects.get(cat_id=category_id)
-            meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
-            
-            if delivery_time_slot:
-                slot = DeliveryTimeSlot.objects.get(slot_id=delivery_time_slot)
-            else:
-                slot = None
-            
-            meal_data = []
-            total_price = 0
-            total_nutrition = {'energy': 0, 'protein': 0, 'carbs': 0, 'fats': 0, 'sugar': 0, 'weight': 0}
-            
-            for meal in meals:
-                meal_info = {
-                    'meal_id': meal.meal_id,
-                    'name': meal.name,
-                    'price': float(meal.price),
-                    'weight': meal.weight,
-                    'image': request.build_absolute_uri(meal.image.url) if meal.image else None
-                }
-                
-                if hasattr(meal, 'nutrition'):
-                    meal_info['nutrition'] = {
-                        'energy': float(meal.nutrition.energy),
-                        'protein': float(meal.nutrition.protein),
-                        'carbs': float(meal.nutrition.carbs),
-                        'fats': float(meal.nutrition.fats),
-                        'sugar': float(meal.nutrition.sugar)
-                    }
-                    total_nutrition['energy'] += float(meal.nutrition.energy)
-                    total_nutrition['protein'] += float(meal.nutrition.protein)
-                    total_nutrition['carbs'] += float(meal.nutrition.carbs)
-                    total_nutrition['fats'] += float(meal.nutrition.fats)
-                    total_nutrition['sugar'] += float(meal.nutrition.sugar)
-                
-                total_nutrition['weight'] += meal.weight
-                total_price += float(meal.price)
-                meal_data.append(meal_info)
-            
-            total_price *= no_of_servings
-            
-            delivery_time_obj = request.data.get('delivery_time')
-            formatted_delivery = None
-            if delivery_time_obj and slot:
-                from datetime import datetime
-                if isinstance(delivery_time_obj, str):
-                    dt = datetime.fromisoformat(delivery_time_obj.replace('Z', '+00:00'))
-                else:
-                    dt = delivery_time_obj
-                date_str = dt.strftime('%d %b %Y')
-                time_str = f"{slot.start_time.strftime('%I:%M %p')} - {slot.end_time.strftime('%I:%M %p')}"
-                formatted_delivery = f"{date_str}, ({time_str})"
-            
-            subscription = UserSubscription.objects.filter(user=request.user).first()
-            subscription_name = subscription.plan.subscription.name if subscription else 'Weekly Plan'
-            
-            delivery_address = request.data.get('delivery_address', '')
-            if not delivery_address:
-                delivery_address = str(request.user.street_address) if request.user.street_address else 'No address provided'
-            
-            preview = {
-                'meal_preferences': {
-                    'type': meal_type.type_name,
-                    'category': category.category,
-                    'servings': f'{no_of_servings} Serving{"s" if no_of_servings > 1 else ""}',
-                    'preferences': preferences if preferences else 'No special preferences'
-                },
-                'added_items': meal_data,
-                'items_count': f'{len(meal_data)} items',
-                'delivery_details': {
-                    'subscription_plan': subscription_name,
-                    'delivery_time': formatted_delivery if formatted_delivery else (slot.display_name if slot else None),
-                    'delivery_address': delivery_address
-                },
-                'total_price': f'Rs.{total_price}',
-                'total_nutrition': total_nutrition
-            }
-            
-            return Response(preview, status=status.HTTP_200_OK)
-            
-        except Type.DoesNotExist:
-            return Response({'error': 'Invalid type'}, status=status.HTTP_400_BAD_REQUEST)
-        except MealCategory.DoesNotExist:
-            return Response({'error': 'Invalid category'}, status=status.HTTP_400_BAD_REQUEST)
-        except DeliveryTimeSlot.DoesNotExist:
-            return Response({'error': 'Invalid delivery slot'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class DeliveryTimeFormatter(APIView):
@@ -602,7 +558,7 @@ class CustomMealDetailView(APIView):
         return [permission() for permission in permission_classes]
 
     def get(self, request, combo_id):
-        custom_meal = CustomMeal.objects.filter(combo_id=combo_id, user=request.user).first()
+        custom_meal = CustomMeal.objects.filter(public_id=combo_id, user=request.user).first()
         if not custom_meal:
             return Response({"error": "Custom meal not found"}, status=status.HTTP_404_NOT_FOUND)
         
@@ -611,7 +567,7 @@ class CustomMealDetailView(APIView):
 
     def put(self, request, combo_id):
         try:
-            custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id, user=request.user)
+            custom_meal = get_object_or_404(CustomMeal, public_id=combo_id, user=request.user)
         except Http404:
             return Response({"error": "Custom meal not found"}, status=status.HTTP_404_NOT_FOUND)
         
