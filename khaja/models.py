@@ -1,35 +1,64 @@
-# khaja/models.py
 from django.db import models
 from users.models import CustomUser
 from django.contrib.postgres.fields import ArrayField
 from users.models import UserSubscription
 from django.utils.text import slugify
-from datetime import datetime
+from datetime import datetime, time
+
+
+class Type(models.Model):
+    type_id = models.AutoField(primary_key=True)
+    type_name = models.CharField(max_length=100, null=False)
+
+    def __str__(self):
+        return self.type_name
+
+
+class MealCategory(models.Model):
+    cat_id = models.AutoField(primary_key=True)
+    category = models.CharField(max_length=30)
+
+    def __str__(self):
+        return self.category
+
+
+class DeliveryTimeSlot(models.Model):
+    slot_id = models.AutoField(primary_key=True)
+    name = models.CharField(max_length=50, unique=True)
+    display_name = models.CharField(max_length=100)
+    start_time = models.TimeField()
+    end_time = models.TimeField()
+    is_active = models.BooleanField(default=True)
+    order = models.IntegerField(default=0, help_text="Display order")
+
+    class Meta:
+        ordering = ['order', 'start_time']
+        verbose_name_plural = "Delivery Time Slots"
+
+    def __str__(self):
+        return f"{self.display_name} ({self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')})"
+    
+    def get_time_range(self):
+        return f"{self.start_time.strftime('%H:%M')} - {self.end_time.strftime('%H:%M')}"
+    
+    def is_time_in_slot(self, check_time):
+        if isinstance(check_time, datetime):
+            check_time = check_time.time()
+        return self.start_time <= check_time <= self.end_time
+
 
 class Meals(models.Model):
-    MEAL_TYPE = [
-        ("VEG", "Veg"),
-        ("NON-VEG", "Non-veg"),
-    ]
-    
-    MEAL_TIME_TYPE = [
-        ("MORNING BREAKFAST", "Morning Breakfast"),
-        ("MORNING LUNCH", "Morning Lunch"),
-        ("AFTERNOON LUNCH", "Afternoon Lunch"),
-        ("EVENING LUNCH", "Evening Lunch"),
-        ("NIGHT DINNER", "Night Dinner")
-    ]
-
     meal_id = models.AutoField(primary_key=True)
     slug = models.SlugField(unique=True)
     name = models.CharField(max_length=50)
     description = models.TextField()
-    type = models.CharField(choices=MEAL_TYPE, max_length=10)
-    meal_category = models.CharField(choices=MEAL_TIME_TYPE, default="MORNING BREAKFAST", max_length=50)
+    type = models.ForeignKey(Type, on_delete=models.CASCADE)
+    meal_category = models.ForeignKey(MealCategory, on_delete=models.CASCADE)
     price = models.DecimalField(max_digits=10, decimal_places=2)
     image = models.ImageField(upload_to='meals/', null=True, blank=True)
     weight = models.IntegerField(default=0, help_text="Weight in grams")
     is_available = models.BooleanField(default=True, help_text="Is this meal available for ordering?")
+    
     def __str__(self):
         return f"{self.name} - {self.meal_category}"
 
@@ -62,12 +91,7 @@ class Ingredient(models.Model):
 
 class MealIngredient(models.Model):
     meal = models.OneToOneField(Meals, on_delete=models.CASCADE, related_name='meal_ingredients', primary_key=True)
-    ingredient_ids = ArrayField(
-        models.IntegerField(),
-        default=list,
-        blank=True,
-        help_text="List of ingredient IDs"
-    )
+    ingredient_ids = ArrayField(models.IntegerField(), default=list, blank=True, help_text="List of ingredient IDs")
     
     def get_ingredients(self):
         return Ingredient.objects.filter(id__in=self.ingredient_ids)
@@ -113,14 +137,7 @@ class Combo(models.Model):
         return sum(meal.price for meal in self.meals.all())
 
     def get_total_nutrition(self):
-        total = {
-            'energy': 0,
-            'protein': 0,
-            'carbs': 0,
-            'fats': 0,
-            'sugar': 0,
-            'weight': 0
-        }
+        total = {'energy': 0, 'protein': 0, 'carbs': 0, 'fats': 0, 'sugar': 0, 'weight': 0}
         for meal in self.meals.all():
             if hasattr(meal, 'nutrition'):
                 total['energy'] += float(meal.nutrition.energy)
@@ -138,46 +155,18 @@ class Combo(models.Model):
         verbose_name_plural = "Combos"
 
 
-
 class CustomMeal(models.Model):
-    MEAL_TYPE = [
-        ("VEG", "Veg"),
-        ("NON-VEG", "Non-veg"),
-        ("BOTH", "Both"),
-    ]
-    MEAL_CATEGORY = [
-        ("MORNING BREAKFAST", "Morning Breakfast"),
-        ("MORNING LUNCH", "Morning Lunch"),
-        ("AFTERNOON LUNCH", "Afternoon Lunch"),
-        ("EVENING LUNCH", "Evening Lunch"),
-        ("NIGHT DINNER", "Night Dinner")
-    ]
-    
-    DELIVERY_TIME_SLOTS = [
-        ("MORNING_BREAKFAST", "Morning Breakfast"),
-        ("LUNCH", "Lunch"),
-        ("EVENING_SNACK", "Evening Snack"),
-        ("DINNER", "Dinner"),
-    ]
-    
-    TIME_SLOT_RANGES = {
-        "MORNING_BREAKFAST": ("07:00", "10:00"),
-        "LUNCH": ("11:00", "14:30"),
-        "EVENING_SNACK": ("15:00", "18:00"),
-        "DINNER": ("18:30", "22:00"),
-    }
-
     combo_id = models.AutoField(primary_key=True)
     user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='custom_users')
-    type = models.CharField(max_length=20, choices=MEAL_TYPE, default="VEG")
     meals = models.ForeignKey(Combo, on_delete=models.CASCADE, null=True, related_name='custom_meals')
-    category = models.CharField(max_length=50, choices=MEAL_CATEGORY)
+    type = models.ForeignKey(Type, on_delete=models.CASCADE)
+    meal_category = models.ForeignKey(MealCategory, on_delete=models.CASCADE)
     no_of_servings = models.IntegerField(default=1, help_text="Number of people")
     preferences = models.TextField(blank=True)
     subscription_plan = models.ForeignKey(UserSubscription, on_delete=models.CASCADE, null=True)
-    delivery_time_slot = models.CharField(max_length=50,choices=DELIVERY_TIME_SLOTS,null=True,blank=True,help_text="Preferred delivery time window")
-    delivery_time = models.DateTimeField(null=True, blank=True,help_text="Specific delivery date and time")
-    delivery_address = models.TextField(blank=True)
+    delivery_time_slot = models.ForeignKey(DeliveryTimeSlot, on_delete=models.SET_NULL, null=True, blank=True, help_text="Preferred delivery time window")
+    delivery_time = models.DateTimeField(null=True, blank=True, help_text="Specific delivery date and time")
+    delivery_address = models.TextField(blank=True, help_text="Delivery address for this meal")
     created_at = models.DateTimeField(auto_now_add=True)
     is_active = models.BooleanField(default=True)
 
@@ -187,24 +176,15 @@ class CustomMeal(models.Model):
             return base_price * self.no_of_servings
         return 0
     
-    def get_time_slot_range(self):
-        if self.delivery_time_slot:
-            return self.TIME_SLOT_RANGES.get(self.delivery_time_slot, ("00:00", "00:00"))
-        return ("00:00", "00:00")
-
     def get_formatted_delivery_time(self):
-        if self.delivery_time:
+        if self.delivery_time and self.delivery_time_slot:
             date_str = self.delivery_time.strftime('%d %b %Y')
-            start_str, end_str = self.get_time_slot_range() 
-            start_time = datetime.strptime(start_str, '%H:%M').strftime('%I:%M %p')
-            end_time = datetime.strptime(end_str, '%H:%M').strftime('%I:%M %p')
-            return f"{date_str}, ({start_time}-{end_time})"
+            time_range = self.delivery_time_slot.get_time_range()
+            return f"{date_str}, ({time_range})"
         return ""
 
-
-
     def __str__(self):
-        return f"Custom Meal #{self.combo_id} - {self.category} for {self.user.first_name}"
+        return f"Custom Meal #{self.combo_id} - {self.meal_category} for {self.user.first_name}"
 
     class Meta:
         verbose_name_plural = "Custom Meals"

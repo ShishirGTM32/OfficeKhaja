@@ -1,7 +1,13 @@
-from rest_framework.pagination import LimitOffsetPagination
+from rest_framework.pagination import CursorPagination
 
-class MenuInfiniteScrollPagination(LimitOffsetPagination):
-    default_limit = 5
-    limit_query_param = 'limit'
-    offset_query_param = 'offset'
-    max_limit = 50
+
+class MenuInfiniteScrollPagination(CursorPagination):
+    page_size = 10  
+    ordering =  ('created_at') 
+    cursor_query_param = 'cursor'
+
+class MealsPagination(CursorPagination):
+    page_size = 10  
+    ordering = ('name')
+    cursor_query_param = 'cursor'
+
