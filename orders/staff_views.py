@@ -137,7 +137,7 @@ class StaffComboOrderItemListView(APIView):
     permission_classes = [IsAuthenticated, IsStaff]
 
     def get(self, request):
-        combo_items = ComboOrderItem.objects.all().order_by('delivery_from_date', 'delivery_time')
+        combo_items = ComboOrderItem.objects.all().order_by('delivery_from_date')
         
         date_from = request.query_params.get('date_from')
         date_to = request.query_params.get('date_to')
@@ -157,10 +157,8 @@ class StaffComboOrderItemListView(APIView):
         if subscription_plan:
             combo_items = combo_items.filter(subscription_plan=subscription_plan.upper())
         
-        paginator = MenuInfiniteScrollPagination()
-        queryset = paginator.paginate_queryset(combo_items, request)
-        serializer = ComboOrderItemSerializer(queryset, many=True)
-        return paginator.get_paginated_response(serializer.data)
+        serializer = ComboOrderItemSerializer(combo_items, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 class StaffComboOrderItemDetailView(APIView):
@@ -308,7 +306,7 @@ class StaffDeliveryScheduleView(APIView):
             delivery_from_date__lte=today,
             delivery_to_date__gte=today,
             order__status__in=['PENDING', 'PROCESSING', 'DELIVERING']
-        ).select_related('order', 'combo', 'order__user').order_by('delivery_time')
+        ).select_related('order', 'combo', 'order__user')
         
         regular_orders = Order.objects.filter(
             created_at__date=today,

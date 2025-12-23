@@ -62,9 +62,10 @@ class OrderSerializer(serializers.ModelSerializer):
         ]
     
     def get_user_name(self, obj):
-        return f"{obj.user.first_name} {obj.user.last_name}" if obj.user else "Guest"
-
-
+        if obj.user.user_type == "ORGANIZATIONS":
+            return obj.user.organization_name
+        return f"{obj.user.first_name} {obj.user.last_name}"
+    
 
 class CartItemSerializer(serializers.ModelSerializer):
     custom_meal_details = CustomMealListSerializer(source='custom_meal', read_only=True)
@@ -123,8 +124,6 @@ class CartItemSerializer(serializers.ModelSerializer):
             validated_data['meals'] = meal
 
         return super().create(validated_data)
-
-
 
 
 class CartItemDetialSerializer(serializers.ModelSerializer):

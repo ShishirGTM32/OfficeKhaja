@@ -7,6 +7,7 @@ from django.utils import timezone
 from django.db import transaction
 from django.http import Http404
 from datetime import timedelta
+from decimal import Decimal
 from khaja.models import Meals, CustomMeal
 from users.models import UserSubscription, CustomUser
 from .pagination import MenuInfiniteScrollPagination
@@ -124,7 +125,6 @@ class CartListView(APIView):
                 return Response({"error": "Cart item not found"}, status=status.HTTP_404_NOT_FOUND)
             cart_item.delete()
             return Response(
-                {"message": "Item removed from cart"}, 
                 status=status.HTTP_204_NO_CONTENT
             )
         else:
@@ -134,7 +134,6 @@ class CartListView(APIView):
                 return Response({"error": "Cart not found"}, status=status.HTTP_404_NOT_FOUND)
             cart.clear()
             return Response(
-                {"message": "Cart cleared successfully"}, 
                 status=status.HTTP_204_NO_CONTENT
             )
 
@@ -216,15 +215,30 @@ class OrderPreviewView(APIView):
     def get(self, request):
         user = request.user
         cart = Cart.objects.filter(user=user).first()
-        
+        cart_item_ids = request.data.get("cart_item_id")
         if not cart or not cart.cart_items.exists():
-            return Response(
-                {"error": "Your cart is empty"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            preview = {
+                "subtotal": 0,
+                "tax": 0,
+                "delivery_charge": 0,
+                "total": 0,
+                "items_count": 0,
+                "has_custom_meals": False,
+                "has_regular_meals": False,
+                "delivery_address": {
+                    "default": request.user.street_address,
+                },
+                "payment_method": {
+                    "method": user.payment_method if user.payment_method else None,
+                    "note": "Using your default payment method"
+                }
+            }
+        
+            return Response(preview, status=status.HTTP_200_OK)
 
         cart_items = cart.cart_items.all()
-        
+        if cart_item_ids:
+            cart_items = cart_items.filter(id__in=cart_item_ids)
         has_custom_meals = cart_items.filter(custom_meal__isnull=False).exists()
         has_regular_meals = cart_items.filter(meals__isnull=False).exists()
         
@@ -236,14 +250,20 @@ class OrderPreviewView(APIView):
                 .distinct()
             )
         
-        default_address = str(user.street_address) if user.street_address else 'New Baneshwor, Kathmandu'
+        default_address = str(user.street_address) if user.street_address else 'None'
         
+        subtotal = sum(item.get_total_price() for item in cart_items)
+        tax = subtotal * Decimal(0.13)
+        delivery_charge = Decimal(50.00) if cart_items.exists() else Decimal(0)
+        total = subtotal + tax + delivery_charge
+        items_count = cart_items.count()
+
         preview = {
-            "subtotal": float(cart.get_subtotal()),
-            "tax": float(cart.get_tax()),
-            "delivery_charge": float(cart.get_delivery_charge()),
-            "total": float(cart.get_total_price()),
-            "items_count": cart.get_items_count(),
+            "subtotal": float(subtotal),
+            "tax": float(tax),
+            "delivery_charge": float(delivery_charge),
+            "total": float(total),
+            "items_count": items_count,
             "has_custom_meals": has_custom_meals,
             "has_regular_meals": has_regular_meals,
             "delivery_address": {
@@ -257,7 +277,7 @@ class OrderPreviewView(APIView):
                 "note": "Using your default payment method"
             }
         }
-        
+
         return Response(preview, status=status.HTTP_200_OK)
 
 
@@ -277,6 +297,62 @@ class OrderListView(APIView):
             orders = orders.filter(status=status_filter.upper())
         serializer = OrderSerializer(orders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class OrderDetailView(APIView):
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [IsAuthenticated, IsSubscribedUser]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
+    
+    def get_object(self, pk, user):
+        return get_object_or_404(Order, pk=pk, user=user)
+
+    def get(self, request, pk):
+        try:
+            order = self.get_object(pk, request.user)
+        except Http404:
+            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+        serializer = OrderSerializer(order)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+    
+    def patch(self, request, pk):
+        data = request.data
+        try:
+            order = get_object_or_404(Order, pk=pk, user=request.user)
+        except Http404:
+            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+        serializer = OrderSerializer(order, data=data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class OrderCancelView(APIView):
+    permission_classes = [IsAuthenticated, IsSubscribedUser]
+
+    def post(self, request, pk):
+        try:
+            order = get_object_or_404(Order, pk=pk, user=request.user)
+        except Http404:
+            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
+
+        if order.status not in ['PENDING']:
+            return Response(
+                {"error": f"Cannot cancel order with status: {order.status}. Only pending orders can be cancelled."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        order.status = 'CANCELLED'
+        order.save()
+
+        serializer = OrderSerializer(order)
+        return Response({
+            "success": True,
+            "message": "Order cancelled successfully",
+            "order": serializer.data
+        }, status=status.HTTP_200_OK)
 
 
 class OrderCreateView(APIView):
@@ -299,11 +375,10 @@ class OrderCreateView(APIView):
             )
         
         cart_item_ids = request.data.get('cart_id')
-        print(cart_item_ids)
+
         cart_items = cart.cart_items.all()
         if cart_item_ids:
             cart_items = cart_items.filter(id__in=cart_item_ids)
-            print(cart_items)
         has_custom_meals = cart_items.filter(custom_meal__isnull=False).exists()
         has_regular_meals = cart_items.filter(meals__isnull=False).exists()
         
@@ -398,59 +473,60 @@ class OrderCreateView(APIView):
             }, status=status.HTTP_201_CREATED)
 
 
-class OrderDetailView(APIView):
-    def get_permissions(self):
-        if self.request.method in ['GET']:
-            permission_classes = [IsAuthenticated, IsSubscribedUser]
-        else:
-            permission_classes = [IsStaff]
-        return [permission() for permission in permission_classes]
-    
-    def get_object(self, pk, user):
-        return get_object_or_404(Order, pk=pk, user=user)
-
-    def get(self, request, pk):
-        try:
-            order = self.get_object(pk, request.user)
-        except Http404:
-            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
-        serializer = OrderSerializer(order)
-        return Response(serializer.data, status=status.HTTP_200_OK)
-    
-    def patch(self, request, pk):
-        data = request.data
-        try:
-            order = get_object_or_404(Order, pk=pk)
-        except Http404:
-            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
-        serializer = OrderSerializer(order, data=data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(serializer.data, status=status.HTTP_200_OK)
-
-
-class OrderCancelView(APIView):
-    permission_classes = [IsAuthenticated, IsSubscribedUser]
+class OrderReorderToCartView(APIView):
+    permission_classes = [IsSubscribedUser]
 
     def post(self, request, pk):
-        try:
-            order = get_object_or_404(Order, pk=pk, user=request.user)
-        except Http404:
-            return Response({"error": "Order not found"}, status=status.HTTP_404_NOT_FOUND)
-
-        if order.status not in ['PENDING']:
+        original_order = get_object_or_404(Order, pk=pk, user=request.user)
+        if original_order.status not in ["DELIVERED", "CANCELLED"]:
             return Response(
-                {"error": f"Cannot cancel order with status: {order.status}. Only pending orders can be cancelled."},
+                {"error": f"Cannot reorder order with status {original_order.status}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        order.status = 'CANCELLED'
-        order.save()
 
-        serializer = OrderSerializer(order)
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        added_items = []
+
+        for item in original_order.order_items.all():
+            existing_item = CartItem.objects.filter(cart=cart, meals=item.meals).first()
+            if existing_item:
+                existing_item.quantity += item.quantity
+                existing_item.save()
+            else:
+                CartItem.objects.create(
+                    cart=cart,
+                    meals=item.meals,
+                    quantity=item.quantity
+                )
+            added_items.append({
+                "type": "meal",
+                "meal_id": item.meals.id,
+                "name": item.meals.name,
+                "quantity": item.quantity
+            })
+
+        for combo_item in original_order.combo_items.all():
+            combo = combo_item.combo
+            existing_item = CartItem.objects.filter(cart=cart, custom_meal=combo).first()
+            if existing_item:
+                existing_item.quantity += combo_item.quantity
+                existing_item.save()
+            else:
+                CartItem.objects.create(
+                    cart=cart,
+                    custom_meal=combo,
+                    quantity=combo_item.quantity
+                )
+            added_items.append({
+                "type": "combo",
+                "combo_id": str(combo.combo_id),
+                "quantity": combo_item.quantity
+            })
+
         return Response({
             "success": True,
-            "message": "Order cancelled successfully",
-            "order": serializer.data
+            "message": "Items added to cart from previous order",
+            "added_items": added_items
         }, status=status.HTTP_200_OK)
 
 

@@ -34,8 +34,9 @@ class Order(models.Model):
     delivery_address = models.TextField()
 
     def calculate_pricing(self):
-        subtotal = sum(item.get_total_price() for item in self.order_items.all())
-        subtotal += sum(item.get_total_price() for item in self.combo_items.all())
+        subtotal = sum(item.get_total_price() for item in self.combo_items.all())
+        subtotal += sum(item.get_total_price() for item in self.order_items.all())
+
         
         tax_rate = Decimal('0.13')
         delivery_charge = Decimal('50.00')
@@ -49,7 +50,7 @@ class Order(models.Model):
         self.save()
 
     def __str__(self):
-        return f"Order #{self.id} by {self.user.first_name if self.user else 'Guest'}"
+        return f"Order #{self.uuid} by {self.user.first_name if self.user else 'Guest'}"
 
 
 class OrderItem(models.Model):
@@ -84,19 +85,21 @@ class ComboOrderItem(models.Model):
     delivery_time_slot = models.ForeignKey(DeliveryTimeSlot, on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField(default=1)
     preferences = models.TextField(blank=True)
-    price_snapshot = models.DecimalField(max_digits=10, decimal_places=2)
+    price_snapshot = models.DecimalField(max_digits=10,decimal_places=2,default=0)
+
     
     def get_total_price(self):
         return self.price_snapshot * Decimal(self.quantity)
     
     def __str__(self):
-        return f"Combo #{self.combo.combo_id} ({self.subscription_plan}) for Order #{self.order.id}"
+        return f"Combo #{self.combo.combo_id} ({self.subscription_plan}) for Order #{self.order.uuid}"
     
     class Meta:
         ordering = ['delivery_from_date']
 
 
 class Cart(models.Model):
+    id = models.UUIDField(primary_key=True, default= uuid.uuid4, editable=False)
     user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='cart')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

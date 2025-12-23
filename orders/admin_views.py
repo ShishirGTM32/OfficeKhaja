@@ -14,6 +14,7 @@ from orders.models import Order, OrderItem, ComboOrderItem
 from khaja.models import Meals, CustomMeal, Combo, Nutrition, Ingredient, MealIngredient
 from users.models import CustomUser, Subscription, UserSubscription
 from orders.serializers import OrderSerializer, OrderItemSerializer, ComboOrderItemSerializer
+from .permissions import IsAdminOrReadOnly
 from khaja.serializers import (
     MealSerializer, CustomMealSerializer, NutritionSerializer, 
     ComboSerializer, IngredientSerializer, MealIngredientSerializer
@@ -343,7 +344,7 @@ class AdminCustomMealDetailView(APIView):
 
 
 class AdminStatisticsView(APIView):
-    permission_classes = [IsAuthenticated, IsStaff]
+    permission_classes = [IsAuthenticated, IsAdminOrReadOnly]
 
     def get(self, request):
         
@@ -362,8 +363,8 @@ class AdminStatisticsView(APIView):
             status__in=['DELIVERED']
         ).aggregate(total=Sum('total_price'))['total'] or 0
         total_meals = Meals.objects.count()
-        veg_meals = Meals.objects.filter(type='VEG').count()
-        non_veg_meals = Meals.objects.filter(type='NON-VEG').count()
+        veg_meals = Meals.objects.filter(type__slug='veg').count()
+        non_veg_meals = Meals.objects.filter(type__slug='non-veg').count()
         total_custom_meals = CustomMeal.objects.count()
         active_custom_meals = CustomMeal.objects.filter(is_active=True).count()
         active_subscriptions = UserSubscription.objects.filter(is_active=True).count()
