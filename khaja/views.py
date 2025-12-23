@@ -4,6 +4,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from django.http import Http404
+from django.db import transaction
 from .models import (Meals, CustomMeal, Nutrition, Combo, Ingredient, DeliveryTimeSlot,
                      MealIngredient, Type, MealCategory)
 from .pagination import MenuInfiniteScrollPagination, MealsPagination
@@ -11,13 +12,14 @@ from users.models import CustomUser, UserSubscription, Subscription
 from users.views import check_subscription
 from django.utils import timezone
 import datetime
+from django.core.cache import cache
 from datetime import timedelta
 from orders.models import ComboOrderItem
 from orders.permissions import IsSubscribedUser, IsStaff
 from .serializers import (
     MealSerializer, CustomMealSerializer, CustomMealListSerializer,
-    NutritionSerializer, IngredientSerializer, 
-    MealIngredientSerializer, TypeSerializer, MealCategorySerializer, DeliveryTimeSlotSerializer
+    NutritionSerializer, IngredientSerializer, DeliveryTimeSlotSerializer,
+    MealIngredientSerializer, TypeSerializer, MealCategorySerializer
 )
 
 
@@ -32,27 +34,10 @@ class TypeListView(APIView):
 
 class DeliveryTimeSlotListView(APIView):
     permission_classes = [AllowAny]
-
     def get(self, request):
-        days_ahead = int(request.GET.get('days', 7))
-        today = timezone.localdate()
-        slots = DeliveryTimeSlot.objects.filter(is_active=True).order_by('start_time')
-
-        combined_slots = []
-        for day_offset in range(days_ahead):
-            date = today + timedelta(days=day_offset)
-            for slot in slots:
-                if date == today and slot.end_time <= timezone.now().time():
-                    continue
-
-                combined_slots.append({
-                    "id": f"{date}_{slot.slot_id}", 
-                    "delivery_date": str(date),
-                    "slot_id": slot.slot_id,
-                    "display": f"{date.strftime('%d %b')} ({slot.start_time.strftime('%H:%M')} - {slot.end_time.strftime('%H:%M')})"
-                })
-
-        return Response(combined_slots, status=status.HTTP_200_OK)
+        delivery = DeliveryTimeSlot.objects.all()
+        serializer = DeliveryTimeSlotSerializer(delivery, many=True)
+        return Response(serializer.data, status=status.HTTP_200_OK)
 
 class MealCategoryListView(APIView):
     permission_classes = [AllowAny]
@@ -131,10 +116,10 @@ class MealListView(APIView):
         queryset = Meals.objects.filter(is_available=True)
         
         if category:
-            queryset = queryset.filter(meal_category__cat_id=category)
+            queryset = queryset.filter(meal_category__slug=category)
         if meal_type:
             if meal_type.upper() != 'BOTH':
-                queryset = queryset.filter(type__type_id=meal_type)
+                queryset = queryset.filter(type__slug=meal_type)
         
         paginator = MealsPagination()
         paginated_qs = paginator.paginate_queryset(queryset, request=request)
@@ -308,21 +293,17 @@ class CustomMealCreateView(APIView):
 
     def get(self, request):
         step = request.query_params.get('step', '1')
-        
         if step == '1':
-            types = Type.objects.all()
-            categories = MealCategory.objects.all()
-            return Response({
-                'step': 1,
-                'title': 'Set your meal preferences',
-                'types': TypeSerializer(types, many=True).data,
-                'categories': MealCategorySerializer(categories, many=True).data
-            }, status=status.HTTP_200_OK)
+            return Response("Setting up category, type, servings and preferences in the backend", status=status.HTTP_200_OK)
         
         elif step == '2':
-            type_id = request.session['type']
-            category_id = request.session['category']
+            key = f"user:{request.user.phone_number}:createmeal"
+            key_data = cache.get(key)
+            if not key_data:
+                return Response("invalid user request", status=status.HTTP_400_BAD_REQUEST)
             
+            type_id =  key_data.get("type")
+            category_id = key_data.get("category")
             if not type_id or not category_id:
                 return Response({'error': 'Type and category are required'}, status=status.HTTP_400_BAD_REQUEST)
             
@@ -331,13 +312,18 @@ class CustomMealCreateView(APIView):
                 category = MealCategory.objects.get(cat_id=category_id)
             except (Type.DoesNotExist, MealCategory.DoesNotExist):
                 return Response({'error': 'Invalid type or category'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            meals = Meals.objects.filter(
-                type_id=type_id,
-                meal_category_id=category_id,
-                is_available=True
-            ).select_related('type', 'meal_category', 'nutrition')
-            
+            if meal_type.slug == "both":                
+                meals = Meals.objects.filter(
+                    meal_category_id=category_id,
+                    is_available=True
+                )
+            else:    
+                meals = Meals.objects.filter(
+                    type_id=type_id,
+                    meal_category_id=category_id,
+                    is_available=True
+                ).select_related('type', 'meal_category', 'nutrition')
+                
             if not meals.exists():
                 return Response({
                     'step': 2,
@@ -384,11 +370,7 @@ class CustomMealCreateView(APIView):
                 'subscription_plans': subscription_plans,
                 'delivery_slots': DeliveryTimeSlotSerializer(delivery_slots, many=True).data,
                 'delivery_address': default_address,
-                'payment_methods': [
-                    {'id': 'esewa', 'name': 'E-Sewa'},
-                    {'id': 'khalti', 'name': 'Khalti'},
-                    {'id': 'cod', 'name': 'Cash on Delivery'}
-                ]
+                'payment_methods': request.user.payment_method
             }, status=status.HTTP_200_OK)
         
         return Response({'error': 'Invalid step'}, status=status.HTTP_400_BAD_REQUEST)
@@ -410,17 +392,29 @@ class CustomMealCreateView(APIView):
                 return Response("invalid type name. Enter valid type name", status=status.HTTP_404_NOT_FOUND)
             if not MealCategory.objects.filter(cat_id=category).first():
                 return Response("invalid category name. Enter valid category name", status=status.HTTP_404_NOT_FOUND)
-            request.session['type'] = type
-            request.session['category'] = category
-            request.session['servings'] = servings
-            request.session['preferences'] = preferences
+            key = request.user.phone_number
+            cache.set(
+                f"user:{key}:createmeal",
+                {
+                    "type":type,
+                    "category":category,
+                    "servings":servings,
+                    "preferences":preferences
+                },
+                timeout=500
+            )
             return Response("Post request success.",status=status.HTTP_200_OK)
         elif step == '2':
             meal_ids = request.data.get('meal_ids')
             meals = Meals.objects.filter(meal_id__in=meal_ids)
             if meals.count() != len(meal_ids):
                 return Response("Invalid meal id presented", status=status.HTTP_404_NOT_FOUND)
-            request.session['meal_ids'] = meal_ids
+            key = f"user:{request.user.phone_number}:createmeal"
+            key_data = cache.get(key)
+            if not key_data:
+                return Response("invalid user key", status=status.HTTP_400_BAD_REQUEST)
+            key_data["meal_ids"] = meal_ids
+            cache.set(key, key_data)
             return Response("post request success.",status=status.HTTP_200_OK)
         elif step == '3':
             street_address = request.user.street_address
@@ -428,12 +422,17 @@ class CustomMealCreateView(APIView):
             delivery_address = request.data.get('delivery_address') 
             if not delivery_address:
                 delivery_address=street_address
+            key = f"user:{request.user.phone_number}:createmeal"
+            key_data = cache.get(key)
+            if not key_data:
+                return Response("invalid user key", status=status.HTTP_400_BAD_REQUEST)
+            type_id = key_data.get("type")
             data = {
-                'type':request.session['type'],
-                'meal_category':request.session['category'],
-                'no_of_servings':request.session['servings'],
-                'preferences':request.session['preferences'],
-                'meal_ids': request.session['meal_ids'],
+                'type':key_data.get("type"),
+                'meal_category':key_data.get("category"),
+                'no_of_servings':key_data.get("servings"),
+                'preferences':key_data.get("preferences"),
+                'meal_ids': key_data.get("meal_ids"),
                 'delivery_address':delivery_address,
                 'delivery_date':delivery_date,
                 'delivery_time_slot':request.data.get('delivery_time_slot'),
@@ -452,7 +451,6 @@ class CustomMealCreateView(APIView):
             
             subscription = UserSubscription.objects.filter(user=request.user).first()
             sub = Subscription.objects.get(sid=subscription.plan.sid)
-            print(sub.sid)
             custom_meal = CustomMeal.objects.create(
                 user=request.user,
                 meals=combo,
@@ -462,44 +460,10 @@ class CustomMealCreateView(APIView):
             
             response_data = CustomMealSerializer(custom_meal).data
             response_data['message'] = 'Custom meal created successfully'
-            
+            cache.delete(key)
             return Response(response_data, status=status.HTTP_201_CREATED)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-
-class DeliveryTimeFormatter(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        delivery_time = request.data.get('delivery_time')
-        slot_id = request.data.get('delivery_time_slot')
-        
-        if not delivery_time or not slot_id:
-            return Response({'error': 'Both delivery_time and delivery_time_slot are required'}, status=status.HTTP_400_BAD_REQUEST)
-        
-        try:
-            slot = DeliveryTimeSlot.objects.get(slot_id=slot_id, is_active=True)
-            from datetime import datetime
-            
-            if isinstance(delivery_time, str):
-                dt = datetime.fromisoformat(delivery_time.replace('Z', '+00:00'))
-            else:
-                dt = delivery_time
-            
-            date_str = dt.strftime('%d %b %Y')
-            time_str = f"{slot.start_time.strftime('%I:%M %p')} - {slot.end_time.strftime('%I:%M %p')}"
-            formatted = f"{date_str}, ({time_str})"
-            
-            return Response({
-                'formatted_delivery_time': formatted,
-                'slot_name': slot.display_name,
-                'date': date_str,
-                'time_range': time_str
-            }, status=status.HTTP_200_OK)
-            
-        except DeliveryTimeSlot.DoesNotExist:
-            return Response({'error': 'Invalid delivery slot'}, status=status.HTTP_404_NOT_FOUND)
 
 
 class CustomMealListView(APIView):
@@ -560,11 +524,11 @@ class CustomMealDetailView(APIView):
     def get(self, request, combo_id):
         custom_meal = CustomMeal.objects.filter(public_id=combo_id, user=request.user).first()
         if not custom_meal:
-            return Response({"error": "Custom meal not found"}, status=status.HTTP_404_NOT_FOUND)
+            return Response({"error": "Custom meal not found or doesnot belongs to you."}, status=status.HTTP_404_NOT_FOUND)
         
         serializer = CustomMealSerializer(custom_meal)
         return Response(serializer.data, status=status.HTTP_200_OK)
-
+    
     def put(self, request, combo_id):
         try:
             custom_meal = get_object_or_404(CustomMeal, public_id=combo_id, user=request.user)
@@ -580,28 +544,28 @@ class CustomMealDetailView(APIView):
             return Response({"error": "Cannot edit custom meal that is in an active order"}, status=status.HTTP_400_BAD_REQUEST)
         
         serializer = CustomMealSerializer(custom_meal, data=request.data, partial=True, context={'request': request})
+        with transaction.atomic():
+            if serializer.is_valid():
+                meal_ids = serializer.validated_data.pop('meal_ids', None)
 
-        if serializer.is_valid():
-            meal_ids = serializer.validated_data.pop('meal_ids', None)
+                if meal_ids:
+                    meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
+                    if meals.count() != len(meal_ids):
+                        return Response({"error": "Some meal IDs are invalid or unavailable"}, status=status.HTTP_400_BAD_REQUEST)
+                    custom_meal.meals.meals.set(meals)
 
-            if meal_ids:
-                meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
-                if meals.count() != len(meal_ids):
-                    return Response({"error": "Some meal IDs are invalid or unavailable"}, status=status.HTTP_400_BAD_REQUEST)
-                custom_meal.meals.meals.set(meals)
+                for attr, value in serializer.validated_data.items():
+                    setattr(custom_meal, attr, value)
+                custom_meal.save()
 
-            for attr, value in serializer.validated_data.items():
-                setattr(custom_meal, attr, value)
-            custom_meal.save()
+                response_serializer = CustomMealSerializer(custom_meal)
+                return Response(response_serializer.data, status=status.HTTP_200_OK)
 
-            response_serializer = CustomMealSerializer(custom_meal)
-            return Response(response_serializer.data, status=status.HTTP_200_OK)
-
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
     def delete(self, request, combo_id):
         try:
-            custom_meal = get_object_or_404(CustomMeal, combo_id=combo_id, user=request.user)
+            custom_meal = get_object_or_404(CustomMeal, public_id=combo_id, user=request.user)
         except Http404:
             return Response({"error": "Custom meal not found"}, status=status.HTTP_404_NOT_FOUND)
         

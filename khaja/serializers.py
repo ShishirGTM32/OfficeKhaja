@@ -169,7 +169,7 @@ class CustomMealSerializer(serializers.ModelSerializer):
         
         if not meal_type:
             raise serializers.ValidationError({'type': 'Meal type is required'})
-        
+        print(f"serializer{meal_type}")
         mismatched_category = meals.exclude(meal_category=meal_category)
         if mismatched_category.exists():
             mismatched_names = ', '.join(mismatched_category.values_list('name', flat=True))
@@ -177,15 +177,16 @@ class CustomMealSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({
                 'meal_ids': f'All meals must be from "{category_name}" category. Invalid meals: {mismatched_names}'
             })
-        
-        mismatched_type = meals.exclude(type=meal_type)
-        if mismatched_type.exists():
-            mismatched_names = ', '.join(mismatched_type.values_list('name', flat=True))
-            type_name = Type.objects.get(type_id=meal_type).type_name
-            raise serializers.ValidationError({
-                'meal_ids': f'All meals must be "{type_name}" type. Invalid meals: {mismatched_names}'
-            })
-        
+        type = Type.objects.get(type_name=meal_type)
+        if not type.slug == "both":
+            mismatched_type = meals.exclude(type=meal_type)
+            if mismatched_type.exists():
+                mismatched_names = ', '.join(mismatched_type.values_list('name', flat=True))
+                type_name = Type.objects.get(type_id=meal_type).type_name
+                raise serializers.ValidationError({
+                    'meal_ids': f'All meals must be "{type_name}" type. Invalid meals: {mismatched_names}'
+                })
+            
         if delivery_date and delivery_slot:
             if not delivery_slot.is_active:
                 raise serializers.ValidationError({
@@ -210,4 +211,6 @@ class CustomMealSerializer(serializers.ModelSerializer):
         return obj.get_total_price()
     
     def get_user_name(self, obj):
+        if obj.user.user_type == "ORGANIZATIONS":
+            return obj.user.organization_name
         return f"{obj.user.first_name} {obj.user.last_name}"

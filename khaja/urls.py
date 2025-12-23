@@ -3,8 +3,7 @@ from .views import (
     MealListView, MealDetailView, MealIngredientsView,
     NutritionView, CustomMealListView, CustomMealDetailView,
     IngredientView, TypeListView, MealCategoryListView,
-    DeliveryTimeSlotListView, CustomMealCreateView,
-    DeliveryTimeFormatter
+    DeliveryTimeSlotListView, CustomMealCreateView
 )
 
 app_name = 'khaja'
@@ -22,5 +21,4 @@ urlpatterns = [
     path('custom-meals/', CustomMealListView.as_view(), name='my-custom-meals'),
     path('custom-meals/<uuid:combo_id>/', CustomMealDetailView.as_view(), name='my-custom-meal-detail'),
     path('create-meal/', CustomMealCreateView.as_view(), name='create-custom-meal'),
-    path('format-delivery-time/', DeliveryTimeFormatter.as_view(), name='format-delivery-time'),
 ]
