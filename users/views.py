@@ -2,7 +2,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, generics
 from rest_framework.permissions import IsAuthenticated, AllowAny
-from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 from django.utils import timezone
 from datetime import timedelta
 from .models import CustomUser, UserSubscription, Subscription
@@ -33,6 +33,8 @@ def get_tokens_for_user(user):
 
 
 def check_subscription(user):
+    if user.is_staff:
+        return True
     subscription = UserSubscription.objects.filter(user=user).first()
     if subscription.expires_on < timezone.now().date():
         subscription.is_active = False
@@ -56,7 +58,7 @@ class UserRegistrationView(APIView):
 
         otp = str(random.randint(100000, 999999))
 
-        flow_key = secrets.token_urlsafe(16)
+        flow_key = user.email
         cache.set(
             f"otp_flow:{flow_key}",
             {
@@ -67,6 +69,7 @@ class UserRegistrationView(APIView):
             },
             timeout=300 
         )
+        request.session['email'] = flow_key
 
         send_mail(
             subject='Registration Confirmation OTP',
@@ -81,20 +84,21 @@ class UserRegistrationView(APIView):
         return Response({
             'user': UserSerializer(user).data,
             'tokens': tokens,
-            'otp_token':flow_key,
             'is_admin': user.is_staff,
             'message': 'User registered successfully. OTP sent to email.'
         }, status=status.HTTP_201_CREATED)
-
 
 class UserLoginView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = UserLoginSerializer(data=request.data)
+        serializer = UserLoginSerializer(data=request.data,
+                                         context = {'request':request}
+                                         )
         serializer.is_valid(raise_exception=True)
         user = serializer.validated_data
-        
+        if not user:
+            return Response("verify otp before logging in.", status=status.HTTP_401_UNAUTHORIZED)
         tokens = get_tokens_for_user(user)
         return Response({
             'user': UserSerializer(user).data,
@@ -108,18 +112,22 @@ class UserLogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        try:
-            refresh_token = request.data.get("refresh")
-            if refresh_token:
-                token = RefreshToken(refresh_token)
-                token.blacklist()
+        refresh_token = request.data.get("refresh")
+        if not refresh_token:
             return Response(
-                {'message': 'Successfully logged out'}, 
+                {"error": "Refresh token is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        try:
+            token = RefreshToken(refresh_token)
+            token.blacklist()
+            return Response(
+                {"message": "Successfully logged out"},
                 status=status.HTTP_200_OK
             )
-        except Exception as e:
+        except TokenError:
             return Response(
-                {'error': 'Invalid token'}, 
+                {"error": "Invalid or expired token"},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
@@ -127,7 +135,7 @@ class UserLogoutView(APIView):
 class UserProfileView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET', 'PUT']:
-            permission_classes = [IsAuthenticated, IsSubscribedUser]
+            permission_classes = [IsSubscribedUser]
         else:
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
@@ -176,7 +184,7 @@ class UserSubscriptionView(APIView):
         return [permission() for permission in permission_classes]
 
     def get(self, request):
-        subscription = UserSubscription.objects.get(user=request.user)
+        subscription = UserSubscription.objects.filter(user=request.user).first()
         if not subscription:
             return Response("You are not subscribed to any plan please subscribe.", status=status.HTTP_403_FORBIDDEN)        
         if check_subscription(request.user):
@@ -192,12 +200,10 @@ class UserSubscriptionView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
         
         try:
-            plan = Subscription.objects.get(subscription=plan_type.upper())
+            plan = Subscription.objects.get(subscription=plan_type)
         except Subscription.DoesNotExist:
-            valid_plans = [choice[0] for choice in Subscription.SUBSCRIPTION_TYPE]
-            return Response({
-                'error': f'Invalid subscription plan. Choose from: {", ".join(valid_plans)}'
-            }, status=status.HTTP_400_BAD_REQUEST)
+            valid = Subscription.objects.all()
+            return Response(SubscriptionSerializer(valid).data, status=status.HTTP_400_BAD_REQUEST)
 
         user = request.user
         activated_date = timezone.now().date()
@@ -259,18 +265,27 @@ class OTPVerificationView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = OTPSerializer(data=request.data)
+        email = request.session['email']
+        data= {
+            "email":email,
+            "otp":request.data.get('otp')
+        }
+        serializer = OTPSerializer(data=data,
+                                   context={'request': request} 
+                            )
         serializer.is_valid(raise_exception=True)
 
         otp_type = serializer.validated_data['otp_type']
         user_id = serializer.validated_data['user_id']
 
-        if otp_type == 'register':
+        if otp_type == 'register' or otp_type == 'authenticate':
             user = CustomUser.objects.get(id=user_id)
             user.is_active = True
             user.save()
-            return Response({"detail": "Registration confirmed. Account activated."}, status=202)
+            del request.session['email']
+            return Response({"detail": "Account activation completed."}, status=202)
         elif otp_type == 'reset_password':
+            del request.session['email']
             return Response({"detail": "OTP verified. You can now reset your password."}, status=202)
 
 
@@ -278,13 +293,16 @@ class ResetPasswordRequestView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        serializer = ResetPasswordRequestSerializer(data=request.data)
+        serializer = ResetPasswordRequestSerializer(
+            data=request.data,
+            context={'request': request}  
+        )
         serializer.is_valid(raise_exception=True)
         return Response({
-            "otp_token":serializer.flow_key,
             "detail": "Reset password OTP sent to your email.",
             "user_id": serializer.user_id
         }, status=status.HTTP_200_OK)
+
 
 class ResetPasswordView(APIView):
     permission_classes = [AllowAny]
@@ -293,10 +311,10 @@ class ResetPasswordView(APIView):
         serializer = ResetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        user_id = request.data.get('user_id')
+        email = request.session['email']
         new_password = serializer.validated_data['new_password']
-
-        user = CustomUser.objects.get(id=user_id)
+        del request.session['email']
+        user = CustomUser.objects.get(email=email)
         user.set_password(new_password)
         user.save()
 
@@ -307,7 +325,7 @@ class ResendOTPView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
-        otp_token = request.data.get("otp_token")
+        otp_token = request.session['email']
         if not otp_token:
             return Response(
                 {"error": "OTP token is required"},
@@ -322,7 +340,7 @@ class ResendOTPView(APIView):
             )
         user_id = flow_data.get("user_id")
         otp_type = flow_data.get("otp_type")
-        if otp_type not in ["register", "reset_password"]:
+        if otp_type not in ["register", "reset_password", "authenticate"]:
             return Response(
                 {"error": "Invalid OTP flow"},
                 status=400

@@ -47,14 +47,38 @@ class UserLoginSerializer(serializers.Serializer):
     def validate(self, data):
         phone_number = data.get('phone_number')
         password = data.get('password')
-
         if phone_number and password:
-            user = authenticate(phone_number=phone_number, password=password)
-            user.last_login = timezone.now()
-            if not user:
+            user = CustomUser.objects.get(phone_number=phone_number)
+            if user:
+                if not user.is_active:
+                    otp = str(random.randint(100000, 999999))
+                    flow_key = user.email
+                    request = self.context.get('request')
+                    request.session['email'] = flow_key
+                    cache.set(
+                        f"otp_flow:{flow_key}",
+                        {
+                            "user_id": user.id,
+                            "otp_type": "activate",
+                            "otp": otp,
+                            "created_at": timezone.now().isoformat()
+                        },
+                        timeout=300
+                    )
+                    status=False
+                    send_mail(
+                        'Account activation OTP',
+                        f'Your OTP code is {otp}',
+                        settings.DEFAULT_FROM_EMAIL,
+                        [user.email],
+                        fail_silently=False
+                    )
+                    return status
+                else:
+                    user = authenticate(phone_number=phone_number, password=password)
+                    user.last_login = timezone.now()
+            elif not user:
                 raise serializers.ValidationError('Invalid phone number or password')
-            if not user.is_active:
-                raise serializers.ValidationError('User account is not active')
             user.save()
             return user
         raise serializers.ValidationError('Must include "phone_number" and "password"')
@@ -86,7 +110,7 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'id', 'phone_number', 'email', 'first_name', 'last_name', 'image',
+            'id', 'phone_number', 'email', 'first_name', 'last_name', 'organization_name','image',
             'user_type', 'no_of_peoples', 'payment_method', 'street_address',
             'city', 'status', 'meal_preferences', 'is_active', 
             'created_at', 'updated_at'
@@ -101,12 +125,43 @@ class UserSerializer(serializers.ModelSerializer):
             )
         return value
 
+    def validate(self, data):
+        instance = self.instance
+        user_type = data.get(
+            'user_type',
+            instance.user_type if instance else None
+        )
+        organization_name = data.get(
+            'organization_name',
+            instance.organization_name if instance else None
+        )
+        first_name = data.get(
+            'first_name',
+            instance.first_name if instance else None
+        )
+        last_name = data.get(
+            'last_name',
+            instance.last_name if instance else None
+        )
+        if user_type == "ORGANIZATIONS" and not organization_name:
+            raise serializers.ValidationError(
+                {"organization_name": "Organization name is required for organizations"}
+            )
+
+        if user_type == "INDIVIDUALS" and not (first_name and last_name):
+            raise serializers.ValidationError(
+                {"first_name": "First and last name are required for individuals"}
+            )
+
+        return data
+
+
 class OTPSerializer(serializers.Serializer):
-    otp_token = serializers.CharField() 
     otp = serializers.CharField()
 
     def validate(self, data):
-        otp_token = data['otp_token']
+        request = self.context.get('request')
+        otp_token = request.session['email']
         otp_input = data['otp']
 
         cache_key = f"otp_flow:{otp_token}"
@@ -121,6 +176,7 @@ class OTPSerializer(serializers.Serializer):
         data['verified'] = True
         data['user_id'] = cached_data['user_id']
         data['otp_type'] = cached_data['otp_type']
+        del request.session['email']
         return data
 
 class ResetPasswordRequestSerializer(serializers.Serializer):
@@ -132,8 +188,9 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
             raise serializers.ValidationError("Requested user email not found.")
         otp = str(random.randint(100000, 999999))
 
-        
-        flow_key = secrets.token_urlsafe(16)
+        request = self.context.get('request')
+        flow_key = value
+        request.session['email'] = value
         cache.set(
             f"otp_flow:{flow_key}",
             {

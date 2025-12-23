@@ -7,14 +7,10 @@ from django.utils import timezone
 
 
 class Subscription(models.Model):
-    SUBSCRIPTION_TYPE = [
-        ("WEEKLY", "Weekly"),
-        ("MONTHLY", "Monthly"),
-        ("YEARLY", "Yearly")
-    ]
+
 
     sid = models.AutoField(primary_key=True)
-    subscription = models.CharField(max_length=8, choices=SUBSCRIPTION_TYPE, default="WEEKLY")
+    subscription = models.CharField(max_length=8)
     rate = models.DecimalField(max_digits=10, decimal_places=2)
     duration_days = models.IntegerField(help_text="Duration in days", default=7)
 
@@ -70,9 +66,9 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
             )
         ]
     )
-    first_name = models.CharField(max_length=30)
-    last_name = models.CharField(max_length=30)
-
+    first_name = models.CharField(max_length=30, null=True, blank=True)
+    last_name = models.CharField(max_length=30, null=True, blank=True)
+    organization_name = models.CharField(max_length=50, null=True, blank=True)
     email = models.EmailField(
         max_length=254,
         validators=[email_regex],
