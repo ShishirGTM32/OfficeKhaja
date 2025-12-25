@@ -6,13 +6,14 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db import transaction
 from django.http import Http404
-from datetime import timedelta
+from datetime import timedelta, datetime
 from decimal import Decimal
 from khaja.models import Meals, CustomMeal
 from users.models import UserSubscription, CustomUser
 from .pagination import MenuInfiniteScrollPagination
 from users.views import check_subscription
 from orders.models import Order, Cart, CartItem, OrderItem, ComboOrderItem
+from rest_framework.permissions import AllowAny
 from .permissions import IsStaff, IsSubscribedUser
 from .serializers import (
     OrderSerializer, CartItemSerializer, CartItemDetialSerializer
@@ -53,6 +54,10 @@ class CartListView(APIView):
             }, status=status.HTTP_400_BAD_REQUEST)
 
         if custom_meal_id:
+            if quantity>1:
+                return Response({
+                    "error":"Quantity one for the case of the custom meal."
+                }, status=status.HTTP_400_BAD_REQUEST)
             try:
                 custom_meal = CustomMeal.objects.get(
                     combo_id=custom_meal_id, 
@@ -62,7 +67,14 @@ class CartListView(APIView):
                 
                 if custom_meal.delivery_date < timezone.localdate():
                     return Response({
-                        "error": "Delivery time cannot be in past. Please change the delivery time of the custom meal you created."
+                        "error": "Delivery time cannot be in past. Please change the delivery date of the custom meal you created."
+                    }, status=status.HTTP_400_BAD_REQUEST)
+                today = timezone.localtime().date()
+                delivery_datetime = datetime.combine(today, custom_meal.delivery_time_slot.start_time)
+                delivery_datetime = timezone.make_aware(delivery_datetime) 
+                if delivery_datetime < timezone.localtime():
+                     return Response({
+                        "error": "Delivery time cannot be in past. Please change the delivery timeslot of the custom meal you created."
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
                 existing_item = CartItem.objects.filter(
@@ -72,7 +84,7 @@ class CartListView(APIView):
 
                 if existing_item:
                     return Response({
-                        "error": "Custom meal already in cart. Number of servings is already specified."
+                        "error": "Custom meal already in cart. Can't add again. "
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
                 cart_item = CartItem.objects.create(
@@ -306,9 +318,11 @@ class OrderDetailView(APIView):
         else:
             permission_classes = [IsStaff]
         return [permission() for permission in permission_classes]
+
     
     def get_object(self, pk, user):
         return get_object_or_404(Order, pk=pk, user=user)
+
 
     def get(self, request, pk):
         try:
@@ -331,7 +345,7 @@ class OrderDetailView(APIView):
 
 
 class OrderCancelView(APIView):
-    permission_classes = [IsAuthenticated, IsSubscribedUser]
+    permission_classes = [IsSubscribedUser]
 
     def post(self, request, pk):
         try:
@@ -344,6 +358,7 @@ class OrderCancelView(APIView):
                 {"error": f"Cannot cancel order with status: {order.status}. Only pending orders can be cancelled."},
                 status=status.HTTP_400_BAD_REQUEST
             )
+        
         order.status = 'CANCELLED'
         order.save()
 
@@ -374,7 +389,7 @@ class OrderCreateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
         
-        cart_item_ids = request.data.get('cart_id')
+        cart_item_ids = request.data.get('cart_ids')
 
         cart_items = cart.cart_items.all()
         if cart_item_ids:
@@ -475,63 +490,79 @@ class OrderCreateView(APIView):
 
 class OrderReorderToCartView(APIView):
     permission_classes = [IsSubscribedUser]
-
+    @transaction.atomic
     def post(self, request, pk):
-        original_order = get_object_or_404(Order, pk=pk, user=request.user)
-        if original_order.status not in ["DELIVERED", "CANCELLED"]:
+        try:
+            order = get_object_or_404(Order, pk=pk, user=request.user)
+        except Http404:
+            return Response("Order not found.", status=status.HTTP_200_OK)
+        print(order)
+        if order.status not in ["DELIVERED", "CANCELLED"]:
             return Response(
-                {"error": f"Cannot reorder order with status {original_order.status}"},
+                {"error": f"Cannot reorder order with status {order.status}"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-
+        if not order.order_items.all() and not order.combo_items.all():
+            return Response("No items to add to cart", status=status.HTTP_200_OK)
         cart, _ = Cart.objects.get_or_create(user=request.user)
         added_items = []
 
-        for item in original_order.order_items.all():
-            existing_item = CartItem.objects.filter(cart=cart, meals=item.meals).first()
-            if existing_item:
-                existing_item.quantity += item.quantity
-                existing_item.save()
-            else:
-                CartItem.objects.create(
-                    cart=cart,
-                    meals=item.meals,
-                    quantity=item.quantity
-                )
+        for item in order.order_items.all():
+            cart_item, created = CartItem.objects.get_or_create(
+                cart=cart,
+                meals=item.meals,
+                custom_meal=None,
+                defaults={'quantity': item.quantity}
+            )
+
+            if not created:
+                cart_item.quantity += item.quantity
+                cart_item.save()
+
             added_items.append({
                 "type": "meal",
-                "meal_id": item.meals.id,
+                "meal_id": item.meals.meal_id,
                 "name": item.meals.name,
                 "quantity": item.quantity
             })
 
-        for combo_item in original_order.combo_items.all():
+        for combo_item in order.combo_items.all():
             combo = combo_item.combo
-            existing_item = CartItem.objects.filter(cart=cart, custom_meal=combo).first()
-            if existing_item:
-                existing_item.quantity += combo_item.quantity
-                existing_item.save()
-            else:
-                CartItem.objects.create(
-                    cart=cart,
-                    custom_meal=combo,
-                    quantity=combo_item.quantity
-                )
+            if CartItem.objects.filter(custom_meal=combo).first():
+                return Response("The custom Meal already present.", status=status.HTTP_200_OK)
+            cart_item, created = CartItem.objects.get_or_create(
+                cart=cart,
+                custom_meal=combo,
+                meals=None,
+                defaults={'quantity': 1}
+            )
+            if not created:
+                cart_item.quantity = 1
+                cart_item.save()
+
             added_items.append({
                 "type": "combo",
                 "combo_id": str(combo.combo_id),
-                "quantity": combo_item.quantity
+                "servings": combo.no_of_servings
             })
 
-        return Response({
-            "success": True,
-            "message": "Items added to cart from previous order",
-            "added_items": added_items
-        }, status=status.HTTP_200_OK)
+        return Response(
+            {
+                "success": True,
+                "message": "Items added to cart from previous order",
+                "added_items": added_items
+            },
+            status=status.HTTP_200_OK
+        )
 
 
 class OrderStatusChoicesView(APIView):
-    permission_classes = [IsStaff]
+    def get_permissions(self):
+        if self.request.method in ['GET']:
+            permission_classes = [AllowAny]
+        else:
+            permission_classes = [IsStaff]
+        return [permission() for permission in permission_classes]
 
     def get(self, request):
         return Response({
@@ -543,3 +574,4 @@ class OrderStatusChoicesView(APIView):
                 {"value": "DELIVERED", "label": "Delivered"}
             ]
         }, status=status.HTTP_200_OK)
+    

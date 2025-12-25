@@ -50,7 +50,7 @@ class Order(models.Model):
         self.save()
 
     def __str__(self):
-        return f"Order #{self.uuid} by {self.user.first_name if self.user else 'Guest'}"
+        return f"Order #{self.uuid} by {self.user.first_name if self.user.user_type == "INDIVIDUALS" else self.user.organization_name}"
 
 
 class OrderItem(models.Model):
