@@ -50,6 +50,7 @@ class NutritionSerializer(serializers.ModelSerializer):
         fields = ['nid', 'energy', 'protein', 'carbs', 'fats', 'sugar']
         read_only_fields = ['nid']
 
+
 class MealListSerializer(serializers.ModelSerializer):
     nutrition = NutritionSerializer(read_only=True)
     
@@ -59,20 +60,21 @@ class MealListSerializer(serializers.ModelSerializer):
         read_only_fields = ['meal_id', 'slug']
 
 
-
 class MealSerializer(serializers.ModelSerializer):
     nutrition = NutritionSerializer(read_only=True)
     ingredients = serializers.SerializerMethodField()
     ingredient_ids = serializers.ListField(child=serializers.IntegerField(), write_only=True, required=False)
     type_name = serializers.CharField(source='type.type_name', read_only=True)
     category_name = serializers.CharField(source='meal_category.category', read_only=True)
-    
+
+
     class Meta:
         model = Meals
         fields = ['meal_id', 'name', 'type', 'type_name', 'description', 'meal_category', 
                   'category_name', 'slug', 'price', 'image', 'weight', 'nutrition', 
                   'ingredients', 'ingredient_ids', 'is_available']
         read_only_fields = ['meal_id', 'slug']
+
 
     def get_ingredients(self, obj):
         if hasattr(obj, 'meal_ingredients'):
@@ -129,7 +131,15 @@ class CustomMealListSerializer(serializers.ModelSerializer):
 
 
 class CustomMealSerializer(serializers.ModelSerializer):
-    meal_ids = serializers.ListField(child=serializers.IntegerField(), write_only=True, required=True)
+    meal_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False
+    )
+
+    type_slug = serializers.SlugField(write_only=True, required=False)
+    meal_category_slug = serializers.SlugField(write_only=True, required=False)
+
     meals = ComboSerializer(read_only=True)
     total_price = serializers.SerializerMethodField()
     user_name = serializers.SerializerMethodField()
@@ -141,76 +151,70 @@ class CustomMealSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = CustomMeal
-        fields = ['combo_id', 'user', 'user_name', 'public_id', 'type', 'type_name', 'meal_category', 
-                  'category_name', 'no_of_servings', 'preferences', 'delivery_time_slot',
-                  'delivery_slot', 'delivery_date', 'formatted_delivery_time', 
-                  'delivery_address', 'meal_ids', 'meals', 'total_price', 'is_active', 
-                  'created_at', 'subscription_plan', 'subscription_plan_name']
-        read_only_fields = ['combo_id', 'user', 'created_at', 'subscription_plan']
-
+        fields = [
+            'combo_id', 'user', 'user_name', 'public_id',
+            'type', 'type_slug', 'type_name',
+            'meal_category', 'meal_category_slug', 'category_name',
+            'no_of_servings', 'preferences',
+            'delivery_time_slot', 'delivery_slot', 'delivery_date',
+            'formatted_delivery_time', 'delivery_address',
+            'meal_ids', 'meals', 'total_price',
+            'is_active', 'created_at',
+            'subscription_plan', 'subscription_plan_name'
+        ]
+        read_only_fields = ['combo_id', 'user', 'created_at', 'subscription_plan', 'type', 'meal_category']
 
     def validate(self, data):
-        meal_ids = data.get('meal_ids', [])
-        meal_category = data.get('meal_category')
-        meal_type = data.get('type')
+        type_slug = data.pop('type_slug', None)
+        category_slug = data.pop('meal_category_slug', None)
+        
+        if type_slug:
+            try:
+                data['type'] = Type.objects.get(slug=type_slug)
+            except Type.DoesNotExist:
+                raise serializers.ValidationError({'type_slug': 'Invalid type'})
+
+        if category_slug:
+            try:
+                data['meal_category'] = MealCategory.objects.get(slug=category_slug)
+            except MealCategory.DoesNotExist:
+                raise serializers.ValidationError({'meal_category_slug': 'Invalid category'})
+
+        meal_type = data.get('type') or self.instance.type
+        meal_category = data.get('meal_category') or self.instance.meal_category
+        meal_ids = data.get('meal_ids')
+
+        if meal_ids:
+            meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
+            if meals.count() != len(meal_ids):
+                raise serializers.ValidationError({'meal_ids': 'Some meal IDs are invalid or unavailable'})
+
+            if meals.exclude(meal_category=meal_category).exists():
+                raise serializers.ValidationError({
+                    'meal_ids': f'All meals must belong to "{meal_category.category}" category'
+                })
+
+            if meal_type.slug != 'both' and meals.exclude(type=meal_type).exists():
+                raise serializers.ValidationError({
+                    'meal_ids': f'All meals must be "{meal_type.type_name}" type'
+                })
+
         delivery_date = data.get('delivery_date')
         delivery_slot = data.get('delivery_time_slot')
-        
-        if not meal_ids:
-            raise serializers.ValidationError({'meal_ids': 'At least one meal must be selected'})
-        
-        meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
-        
-        if meals.count() != len(meal_ids):
-            raise serializers.ValidationError({'meal_ids': 'Some meal IDs are invalid or unavailable'})
-        
-        if not meal_category:
-            raise serializers.ValidationError({'meal_category': 'Meal category is required'})
-        
-        if not meal_type:
-            raise serializers.ValidationError({'type': 'Meal type is required'})
-        print(f"serializer{meal_type}")
-        mismatched_category = meals.exclude(meal_category=meal_category)
-        if mismatched_category.exists():
-            mismatched_names = ', '.join(mismatched_category.values_list('name', flat=True))
-            category_name = MealCategory.objects.get(cat_id=meal_category).category
-            raise serializers.ValidationError({
-                'meal_ids': f'All meals must be from "{category_name}" category. Invalid meals: {mismatched_names}'
-            })
-        type = Type.objects.get(type_name=meal_type)
-        if not type.slug == "both":
-            mismatched_type = meals.exclude(type=meal_type)
-            if mismatched_type.exists():
-                mismatched_names = ', '.join(mismatched_type.values_list('name', flat=True))
-                type_name = Type.objects.get(type_id=meal_type).type_name
-                raise serializers.ValidationError({
-                    'meal_ids': f'All meals must be "{type_name}" type. Invalid meals: {mismatched_names}'
-                })
-            
-        if delivery_date and delivery_slot:
-            if not delivery_slot.is_active:
-                raise serializers.ValidationError({
-                    'delivery_time_slot': 'Selected delivery time slot is not available'
-                })
-            
-        
+
         if delivery_slot and not delivery_date:
-            raise serializers.ValidationError({
-                'delivery_time': 'Delivery date is required with delivery slot is provided'
-            })
-        
-        delivery_address = data.get('delivery_address', '').strip()
-        if not delivery_address:
-            raise serializers.ValidationError({
-                'delivery_address': 'Delivery address is required'
-            })
+            raise serializers.ValidationError({'delivery_date': 'Delivery date is required with delivery slot'})
+
+        if delivery_date and delivery_slot and not delivery_slot.is_active:
+            raise serializers.ValidationError({'delivery_time_slot': 'Selected delivery slot is not active'})
 
         return data
 
     def get_total_price(self, obj):
         return obj.get_total_price()
-    
+
     def get_user_name(self, obj):
         if obj.user.user_type == "ORGANIZATIONS":
             return obj.user.organization_name
         return f"{obj.user.first_name} {obj.user.last_name}"
+

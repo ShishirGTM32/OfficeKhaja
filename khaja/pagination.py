@@ -7,7 +7,6 @@ class MenuInfiniteScrollPagination(CursorPagination):
     cursor_query_param = 'cursor'
 
 class MealsPagination(CursorPagination):
-    page_size = 10  
+    page_size = 15 
     ordering = ('name')
     cursor_query_param = 'cursor'
-

@@ -5,15 +5,15 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.shortcuts import get_object_or_404
 from django.http import Http404
 from django.db import transaction
-from .models import (Meals, CustomMeal, Nutrition, Combo, Ingredient, DeliveryTimeSlot,
+from .models import (Meals, CustomMeal, Combo, Ingredient, DeliveryTimeSlot,
                      MealIngredient, Type, MealCategory)
 from .pagination import MenuInfiniteScrollPagination, MealsPagination
 from users.models import CustomUser, UserSubscription, Subscription
 from users.views import check_subscription
 from django.utils import timezone
-import datetime
+
 from django.core.cache import cache
-from datetime import timedelta
+from datetime import timedelta, datetime
 from orders.models import ComboOrderItem
 from orders.permissions import IsSubscribedUser, IsStaff
 from .serializers import (
@@ -34,10 +34,27 @@ class TypeListView(APIView):
 
 class DeliveryTimeSlotListView(APIView):
     permission_classes = [AllowAny]
+
     def get(self, request):
-        delivery = DeliveryTimeSlot.objects.all()
-        serializer = DeliveryTimeSlotSerializer(delivery, many=True)
+        date_str = request.query_params.get('date')
+        if not date_str:
+            return Response(
+                {"error": "date query param is required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        delivery_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        today = timezone.localdate()
+        now_time = timezone.localtime().time()
+
+        slots = DeliveryTimeSlot.objects.filter(is_active=True)
+
+        if delivery_date == today:
+            slots = slots.filter(start_time__gt=now_time)
+
+        serializer = DeliveryTimeSlotSerializer(slots, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
 
 class MealCategoryListView(APIView):
     permission_classes = [AllowAny]
@@ -295,180 +312,231 @@ class CustomMealCreateView(APIView):
         step = request.query_params.get('step', '1')
         if step == '1':
             return Response("Setting up category, type, servings and preferences in the backend", status=status.HTTP_200_OK)
-        
+
         elif step == '2':
             key = f"user:{request.user.phone_number}:createmeal"
             key_data = cache.get(key)
             if not key_data:
-                return Response("invalid user request", status=status.HTTP_400_BAD_REQUEST)
-            
-            type_id =  key_data.get("type")
-            category_id = key_data.get("category")
-            if not type_id or not category_id:
+                return Response("Invalid user request", status=status.HTTP_400_BAD_REQUEST)
+
+            type_slug = key_data.get("type_slug")
+            category_slug = key_data.get("category_slug")
+            if not type_slug or not category_slug:
                 return Response({'error': 'Type and category are required'}, status=status.HTTP_400_BAD_REQUEST)
-            
+
             try:
-                meal_type = Type.objects.get(type_id=type_id)
-                category = MealCategory.objects.get(cat_id=category_id)
+                meal_type = Type.objects.get(slug=type_slug)
+                category = MealCategory.objects.get(slug=category_slug)
             except (Type.DoesNotExist, MealCategory.DoesNotExist):
                 return Response({'error': 'Invalid type or category'}, status=status.HTTP_400_BAD_REQUEST)
-            if meal_type.slug == "both":                
+
+            if meal_type.slug == "both":
+                meals = Meals.objects.filter(meal_category__slug=category_slug, is_available=True)
+            else:
                 meals = Meals.objects.filter(
-                    meal_category_id=category_id,
-                    is_available=True
-                )
-            else:    
-                meals = Meals.objects.filter(
-                    type_id=type_id,
-                    meal_category_id=category_id,
+                    type__slug=type_slug,
+                    meal_category__slug=category_slug,
                     is_available=True
                 ).select_related('type', 'meal_category', 'nutrition')
-                
+
             if not meals.exists():
                 return Response({
                     'step': 2,
                     'title': 'Which items do you want to add to meal?',
                     'message': f'No {meal_type.type_name} meals available for {category.category}',
                     'meals': [],
-                    'selected_type': type_id,
-                    'selected_category': category_id
+                    'selected_type': type_slug,
+                    'selected_category': category_slug
                 }, status=status.HTTP_200_OK)
-            
+
             return Response({
                 'step': 2,
                 'title': 'Which items do you want to add to meal?',
                 'meals': MealSerializer(meals, many=True).data,
-                'selected_type': type_id,
+                'selected_type': type_slug,
                 'selected_type_name': meal_type.type_name,
-                'selected_category': category_id,
+                'selected_category': category_slug,
                 'selected_category_name': category.category,
                 'total_available': meals.count()
             }, status=status.HTTP_200_OK)
-        
+
         elif step == '3':
             subscriptions = UserSubscription.objects.filter(user=request.user)
             delivery_slots = DeliveryTimeSlot.objects.filter(is_active=True)
-            
-            subscription_plans = []
-            for sub in subscriptions:
-                subscription_plans.append({
-                    'id': sub.sub_id,
-                    'name': sub.plan.subscription,
-                    'duration': sub.plan.duration_days,
-                    'is_active': True
-                })
-            
+            subscription_plans = [{'id': sub.sub_id, 'name': sub.plan.subscription, 'duration': sub.plan.duration_days, 'is_active': True} for sub in subscriptions]
+
             if not subscription_plans:
                 subscription_plans = [{'id': None, 'name': 'No active subscription', 'is_active': False}]
-            delivery_address = request.data.get('delivery_address')
-            default_address = str(request.user.street_address) if request.user.street_address else delivery_address
-            
+
+            delivery_address = request.data.get('delivery_address') or str(request.user.street_address)
+
             return Response({
                 'step': 3,
                 'title': 'Review delivery details',
                 'subtitle': "Let's confirm your meal delivery details",
-                'subscription_plans': subscription_plans,
                 'delivery_slots': DeliveryTimeSlotSerializer(delivery_slots, many=True).data,
-                'delivery_address': default_address,
+                'delivery_address': delivery_address,   
                 'payment_methods': request.user.payment_method
             }, status=status.HTTP_200_OK)
-        
+
         return Response({'error': 'Invalid step'}, status=status.HTTP_400_BAD_REQUEST)
+
 
     def post(self, request):
         if check_subscription(request.user):
-            return Response({'error': 'Subscription not renewed'}, status=status.HTTP_403_FORBIDDEN)
-        
-        step = request.query_params.get('step', '1')
-        
-        if step == '1':
-            type = request.data.get('type')
-            category = request.data.get('category')
-            servings = request.data.get('servings')
-            preferences = request.data.get('preferences')
-            if not type and not category and not servings and not preferences:
-                return Response("type, category, servings and preferences field are required", status=status.HTTP_400_BAD_REQUEST)
-            if not Type.objects.filter(type_id=type).first():
-                return Response("invalid type name. Enter valid type name", status=status.HTTP_404_NOT_FOUND)
-            if not MealCategory.objects.filter(cat_id=category).first():
-                return Response("invalid category name. Enter valid category name", status=status.HTTP_404_NOT_FOUND)
-            key = request.user.phone_number
-            cache.set(
-                f"user:{key}:createmeal",
-                {
-                    "type":type,
-                    "category":category,
-                    "servings":servings,
-                    "preferences":preferences
-                },
-                timeout=500
+            return Response(
+                {"error": "Subscription not renewed"},
+                status=status.HTTP_403_FORBIDDEN
             )
-            return Response("Post request success.",status=status.HTTP_200_OK)
-        elif step == '2':
-            meal_ids = request.data.get('meal_ids')
-            meals = Meals.objects.filter(meal_id__in=meal_ids)
-            if meals.count() != len(meal_ids):
-                return Response("Invalid meal id presented", status=status.HTTP_404_NOT_FOUND)
-            key = f"user:{request.user.phone_number}:createmeal"
-            key_data = cache.get(key)
-            if not key_data:
-                return Response("invalid user key", status=status.HTTP_400_BAD_REQUEST)
-            key_data["meal_ids"] = meal_ids
-            cache.set(key, key_data)
-            return Response("post request success.",status=status.HTTP_200_OK)
-        elif step == '3':
-            street_address = request.user.street_address
-            delivery_date = request.data.get('delivery_date')
-            delivery_address = request.data.get('delivery_address') 
-            if not delivery_address:
-                delivery_address=street_address
-            key = f"user:{request.user.phone_number}:createmeal"
-            key_data = cache.get(key)
-            if not key_data:
-                return Response("invalid user key", status=status.HTTP_400_BAD_REQUEST)
-            type_id = key_data.get("type")
-            data = {
-                'type':key_data.get("type"),
-                'meal_category':key_data.get("category"),
-                'no_of_servings':key_data.get("servings"),
-                'preferences':key_data.get("preferences"),
-                'meal_ids': key_data.get("meal_ids"),
-                'delivery_address':delivery_address,
-                'delivery_date':delivery_date,
-                'delivery_time_slot':request.data.get('delivery_time_slot'),
-            }
-        serializer = CustomMealSerializer(data=data, context={'request': request})
-        
-        if serializer.is_valid():
-            meal_ids = serializer.validated_data.pop('meal_ids')
-            meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
-            
-            if meals.count() != len(meal_ids):
-                return Response({'error': 'Some meal IDs are invalid or unavailable'}, status=status.HTTP_400_BAD_REQUEST)
-            
-            combo = Combo.objects.create()
-            combo.meals.set(meals)
-            
-            subscription = UserSubscription.objects.filter(user=request.user).first()
-            sub = Subscription.objects.get(sid=subscription.plan.sid)
-            custom_meal = CustomMeal.objects.create(
-                user=request.user,
-                meals=combo,
-                subscription_plan=subscription,
-                **serializer.validated_data
+
+        if request.query_params.get("step") != "3":
+            return Response(
+                {"error": "Invalid step"},
+                status=status.HTTP_400_BAD_REQUEST
             )
-            
-            response_data = CustomMealSerializer(custom_meal).data
-            response_data['message'] = 'Custom meal created successfully'
+
+        key = f"user:{request.user.phone_number}:createmeal"
+        key_data = cache.get(key)
+        if not key_data:
+            return Response(
+                {"error": "Session expired"},
+                status=status.HTTP_400_BAD_REQUEST
+            ) 
+
+        delivery_date = request.data.get("delivery_date")
+        delivery_time_slot_id = request.data.get("delivery_time_slot")
+
+        if not delivery_date or not delivery_time_slot_id:
+            return Response(
+                {"error": "Delivery date and time slot are required"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        delivery_slot = get_object_or_404(
+            DeliveryTimeSlot,
+            slot_id=delivery_time_slot_id,
+            is_active=True
+        )
+
+        if delivery_date == str(timezone.localdate()):
+            if delivery_slot.start_time <= timezone.localtime().time():
+                return Response(
+                    {"error": "Selected time slot has already passed"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+        data = {
+            "type_slug": key_data["type_slug"],
+            "meal_category_slug": key_data["category_slug"],
+            "no_of_servings": key_data["servings"],
+            "preferences": key_data["preferences"],
+            "meal_ids": key_data["meal_ids"],
+            "delivery_address": request.data.get("delivery_address") or request.user.street_address,
+            "delivery_date": delivery_date,
+            "delivery_time_slot": delivery_slot.slot_id
+        }
+
+        serializer = CustomMealSerializer(
+            data=data,
+            context={"request": request}
+        )
+
+        serializer.is_valid(raise_exception=True)
+
+        meals = Meals.objects.filter(
+            meal_id__in=serializer.validated_data.pop("meal_ids"),
+            is_available=True
+        )
+
+        combo = Combo.objects.create()
+        combo.meals.set(meals)
+
+        subscription = UserSubscription.objects.filter(user=request.user).first()
+
+        custom_meal = CustomMeal.objects.create(
+            user=request.user,
+            meals=combo,
+            subscription_plan=subscription,
+            **serializer.validated_data
+        )
+
+        cache.delete(key)
+
+        return Response(
+            CustomMealSerializer(custom_meal).data,
+            status=status.HTTP_201_CREATED
+        )
+
+
+    def patch(self, request):
+        if check_subscription(request.user):
+            return Response(
+                {"error": "Subscription not renewed"},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        step = request.query_params.get("step")
+        key = f"user:{request.user.phone_number}:createmeal"
+        if step == "1":
             cache.delete(key)
-            return Response(response_data, status=status.HTTP_201_CREATED)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            type_slug = request.data.get("type")
+            category_slug = request.data.get("category")
+
+            if not Type.objects.filter(slug=type_slug).exists():
+                return Response(
+                    {"error": "Invalid type"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            if not MealCategory.objects.filter(slug=category_slug).exists():
+                return Response(
+                    {"error": "Invalid category"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+
+            cache.set(
+                key,
+                {
+                    "type_slug": type_slug,
+                    "category_slug": category_slug,
+                    "servings": request.data.get("servings"),
+                    "preferences": request.data.get("preferences")
+                },
+                timeout=600
+            )
+            return Response({"success": True}, status=status.HTTP_200_OK)
+
+        elif step == "2":
+            meal_ids = request.data.get("meal_ids", [])
+            meals = Meals.objects.filter(meal_id__in=meal_ids)
+
+            if meals.count() != len(meal_ids):
+                return Response(
+                    {"error": "Invalid meal selection"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            key_data = cache.get(key)
+            if not key_data:
+                return Response(
+                    {"error": "Session expired"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            key_data["meal_ids"] = meal_ids
+            cache.set(key, key_data, timeout=600)
+
+            return Response({"success": True}, status=status.HTTP_200_OK)
+
+        return Response(
+            {"error": "Invalid step"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
 
 
 class CustomMealListView(APIView):
     def get_permissions(self):
-        if self.request.method in ['GET', 'POST']:
+        if self.request.method in ['GET']:
             permission_classes = [IsAuthenticated, IsSubscribedUser]
         else:
             permission_classes = [IsStaff]
@@ -476,46 +544,21 @@ class CustomMealListView(APIView):
 
     def get(self, request):
         custom_meals = CustomMeal.objects.filter(user=request.user, is_active=True)
+        type = request.query_params.get('type', None)
+        category = request.query_params.get('category',None)
+        if type:
+            custom_meals=custom_meals.filter(type__slug=type)
+        if category:
+            custom_meals=custom_meals.filter(category__slug=category)
         paginator = MenuInfiniteScrollPagination()
         queryset = paginator.paginate_queryset(custom_meals, request=request)
         serializer = CustomMealListSerializer(queryset, many=True)
         return paginator.get_paginated_response(serializer.data)
-    
-    def post(self, request):
-        if check_subscription(request.user):
-            return Response({"error": "Subscription not renewed"}, status=status.HTTP_403_FORBIDDEN)
-        
-        serializer = CustomMealSerializer(data=request.data, context={'request': request})
-        
-        if serializer.is_valid():
-            meal_ids = serializer.validated_data.pop('meal_ids')
-            meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
-            
-            if meals.count() != len(meal_ids):
-                return Response({"error": "Some meal IDs are invalid or unavailable"}, status=status.HTTP_400_BAD_REQUEST)
-            
-            combo = Combo.objects.create()
-            combo.meals.set(meals)
-            
-            subscription = UserSubscription.objects.filter(user=request.user).first()
-            
-            custom_meal = CustomMeal.objects.create(
-                user=request.user,
-                meals=combo,
-                delivery_address=str(request.user.street_address),
-                subscription_plan=subscription.plan.subscription if subscription else None,
-                **serializer.validated_data
-            )
-            
-            response_serializer = CustomMealSerializer(custom_meal)
-            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
-        
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
 class CustomMealDetailView(APIView):
     def get_permissions(self):
-        if self.request.method in ['GET', 'PUT', 'DELETE']:
+        if self.request.method in ['GET', 'PATCH', 'DELETE']:
             permission_classes = [IsAuthenticated, IsSubscribedUser]
         else:
             permission_classes = [IsStaff]
@@ -529,29 +572,36 @@ class CustomMealDetailView(APIView):
         serializer = CustomMealSerializer(custom_meal)
         return Response(serializer.data, status=status.HTTP_200_OK)
     
-    def put(self, request, combo_id):
-        try:
-            custom_meal = get_object_or_404(CustomMeal, public_id=combo_id, user=request.user)
-        except Http404:
-            return Response({"error": "Custom meal not found"}, status=status.HTTP_404_NOT_FOUND)
-        
+    def patch(self, request, combo_id):
+        custom_meal = get_object_or_404(CustomMeal, public_id=combo_id, user=request.user)
         in_order = ComboOrderItem.objects.filter(
             combo_id=custom_meal.combo_id,
             order__status__in=['PENDING', 'PROCESSING', 'DELIVERING']
         ).exists()
-        
+
         if in_order:
-            return Response({"error": "Cannot edit custom meal that is in an active order"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        serializer = CustomMealSerializer(custom_meal, data=request.data, partial=True, context={'request': request})
+            return Response(
+                {"error": "Cannot edit custom meal that is in an active order"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        serializer = CustomMealSerializer(
+            custom_meal, 
+            data=request.data, 
+            partial=True, 
+            context={'request': request}
+        )
+
         with transaction.atomic():
             if serializer.is_valid():
                 meal_ids = serializer.validated_data.pop('meal_ids', None)
-
-                if meal_ids:
+                if meal_ids is not None:
                     meals = Meals.objects.filter(meal_id__in=meal_ids, is_available=True)
                     if meals.count() != len(meal_ids):
-                        return Response({"error": "Some meal IDs are invalid or unavailable"}, status=status.HTTP_400_BAD_REQUEST)
+                        return Response(
+                            {"error": "Some meal IDs are invalid or unavailable"},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
                     custom_meal.meals.meals.set(meals)
 
                 for attr, value in serializer.validated_data.items():
@@ -578,4 +628,5 @@ class CustomMealDetailView(APIView):
             return Response({"error": "Cannot delete custom meal that is in an active order"}, status=status.HTTP_400_BAD_REQUEST)
         
         custom_meal.delete()
-        return Response({"message": "Custom meal deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+        return Response({"message": "Custom meal deleted successfully"}, status=status.HTTP_200_OK)
+
