@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'chatapp',
     'notifications.apps.NotificationsConfig',
     'channels',
+    'django_celery_beat',
 ]
 
 MIDDLEWARE = [
@@ -228,7 +229,15 @@ SPECTACULAR_SETTINGS = {
     'SERVE_INCLUDE_SCHEMA': False,
 }
 
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_ENABLE_UTC= True
+CELERY_TIMEZONE = 'Asia/Kathmandu'
 
+CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'smtp.gmail.com'
