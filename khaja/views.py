@@ -11,7 +11,7 @@ from .pagination import MenuInfiniteScrollPagination, MealsPagination
 from users.models import CustomUser, UserSubscription, Subscription
 from users.views import check_subscription
 from django.utils import timezone
-
+from drf_spectacular.utils import extend_schema
 from django.core.cache import cache
 from datetime import timedelta, datetime
 from orders.models import ComboOrderItem
@@ -22,7 +22,10 @@ from .serializers import (
     MealIngredientSerializer, TypeSerializer, MealCategorySerializer
 )
 
-
+@extend_schema(
+    request=TypeSerializer,
+    responses={200: TypeSerializer}
+)
 class TypeListView(APIView):
     permission_classes = [AllowAny]
 
@@ -31,19 +34,23 @@ class TypeListView(APIView):
         serializer = TypeSerializer(types, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
+@extend_schema(
+    request=DeliveryTimeSlotSerializer,
+    responses={200: DeliveryTimeSlotSerializer}
+)
 class DeliveryTimeSlotListView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        date_str = request.query_params.get('date')
+        date_str = request.query_params.get("date")
         if not date_str:
-            return Response(
-                {"error": "date query param is required"},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+            return Response({"error": "date query param required"}, status=400)
 
-        delivery_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        try:
+            delivery_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"error": "Invalid date format (YYYY-MM-DD)"}, status=400)
+
         today = timezone.localdate()
         now_time = timezone.localtime().time()
 
@@ -52,10 +59,23 @@ class DeliveryTimeSlotListView(APIView):
         if delivery_date == today:
             slots = slots.filter(start_time__gt=now_time)
 
-        serializer = DeliveryTimeSlotSerializer(slots, many=True)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        formatted_date = delivery_date.strftime("%d %b %Y")
+        data = [
+            {
+                "slot_id": slot.slot_id,
+                "formatted_label": f"{formatted_date} ({slot.start_time.strftime('%H:%M')} - {slot.end_time.strftime('%H:%M')})",
+                "time_range": f"{slot.start_time.strftime('%H:%M')} - {slot.end_time.strftime('%H:%M')}"
+            }
+            for slot in slots   
+        ]
+
+        return Response(data, status=200)
 
 
+@extend_schema(
+    request=MealCategorySerializer,
+    responses={200: MealCategorySerializer}
+)
 class MealCategoryListView(APIView):
     permission_classes = [AllowAny]
 
@@ -64,7 +84,10 @@ class MealCategoryListView(APIView):
         serializer = MealCategorySerializer(categories, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
+@extend_schema(
+    request=IngredientSerializer,
+    responses={200: IngredientSerializer}
+)
 class IngredientView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -117,7 +140,10 @@ class IngredientView(APIView):
         ingredient.delete()
         return Response({"message": "Ingredient deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
 
-
+@extend_schema(
+    request=MealSerializer,
+    responses={200: MealSerializer}
+)
 class MealListView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -163,7 +189,10 @@ class MealListView(APIView):
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
+@extend_schema(
+    request=MealSerializer,
+    responses={200: MealSerializer}
+)
 class MealDetailView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -214,7 +243,10 @@ class MealDetailView(APIView):
         meal.delete()
         return Response({"message": "Meal deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
 
-
+@extend_schema(
+    request=MealIngredientSerializer,
+    responses={200: MealIngredientSerializer}
+)
 class MealIngredientsView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -253,7 +285,10 @@ class MealIngredientsView(APIView):
         serializer = MealIngredientSerializer(meal_ingredient)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
+@extend_schema(
+    request=NutritionSerializer,
+    responses={200: NutritionSerializer}
+)
 class NutritionView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -304,7 +339,10 @@ class NutritionView(APIView):
             return Response(serializer.data, status=status.HTTP_200_OK)
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-
+@extend_schema(
+    request=CustomMealSerializer,
+    responses={200: CustomMealSerializer}
+)
 class CustomMealCreateView(APIView):
     permission_classes = [IsAuthenticated, IsSubscribedUser]
 
@@ -401,16 +439,27 @@ class CustomMealCreateView(APIView):
             return Response(
                 {"error": "Session expired"},
                 status=status.HTTP_400_BAD_REQUEST
-            ) 
+            )
 
-        delivery_date = request.data.get("delivery_date")
+        delivery_date_str = request.data.get("delivery_date")
         delivery_time_slot_id = request.data.get("delivery_time_slot")
 
-        if not delivery_date or not delivery_time_slot_id:
+        if not delivery_date_str or not delivery_time_slot_id:
             return Response(
                 {"error": "Delivery date and time slot are required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
+
+        try:
+            delivery_date = datetime.strptime(
+                delivery_date_str, "%Y-%m-%d"
+            ).date()
+        except ValueError:
+            return Response(
+                {"error": "Invalid delivery date format (YYYY-MM-DD)"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 
         delivery_slot = get_object_or_404(
             DeliveryTimeSlot,
@@ -418,8 +467,11 @@ class CustomMealCreateView(APIView):
             is_active=True
         )
 
-        if delivery_date == str(timezone.localdate()):
-            if delivery_slot.start_time <= timezone.localtime().time():
+        today = timezone.localdate()
+        now_time = timezone.localtime().time()
+
+        if delivery_date == today:
+            if delivery_slot.start_time <= now_time:
                 return Response(
                     {"error": "Selected time slot has already passed"},
                     status=status.HTTP_400_BAD_REQUEST
@@ -431,7 +483,8 @@ class CustomMealCreateView(APIView):
             "no_of_servings": key_data["servings"],
             "preferences": key_data["preferences"],
             "meal_ids": key_data["meal_ids"],
-            "delivery_address": request.data.get("delivery_address") or request.user.street_address,
+            "delivery_address": request.data.get("delivery_address")
+                or request.user.street_address,
             "delivery_date": delivery_date,
             "delivery_time_slot": delivery_slot.slot_id
         }
@@ -440,7 +493,6 @@ class CustomMealCreateView(APIView):
             data=data,
             context={"request": request}
         )
-
         serializer.is_valid(raise_exception=True)
 
         meals = Meals.objects.filter(
@@ -451,7 +503,9 @@ class CustomMealCreateView(APIView):
         combo = Combo.objects.create()
         combo.meals.set(meals)
 
-        subscription = UserSubscription.objects.filter(user=request.user).first()
+        subscription = UserSubscription.objects.filter(
+            user=request.user
+        ).first()
 
         custom_meal = CustomMeal.objects.create(
             user=request.user,
@@ -467,8 +521,7 @@ class CustomMealCreateView(APIView):
             status=status.HTTP_201_CREATED
         )
 
-
-    def patch(self, request):
+    def patch(self, request):   
         if check_subscription(request.user):
             return Response(
                 {"error": "Subscription not renewed"},
@@ -534,6 +587,10 @@ class CustomMealCreateView(APIView):
         )
 
 
+@extend_schema(
+    request=CustomMealSerializer,
+    responses={200: CustomMealSerializer}
+)
 class CustomMealListView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -555,7 +612,10 @@ class CustomMealListView(APIView):
         serializer = CustomMealListSerializer(queryset, many=True)
         return paginator.get_paginated_response(serializer.data)
 
-
+@extend_schema(
+    request=CustomMealSerializer,
+    responses={200: CustomMealSerializer}
+)
 class CustomMealDetailView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET', 'PATCH', 'DELETE']:
