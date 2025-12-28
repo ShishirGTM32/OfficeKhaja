@@ -12,6 +12,7 @@ from khaja.models import Meals, CustomMeal
 from users.models import UserSubscription, CustomUser
 from .pagination import MenuInfiniteScrollPagination
 from users.views import check_subscription
+from drf_spectacular.utils import extend_schema
 from orders.models import Order, Cart, CartItem, OrderItem, ComboOrderItem
 from rest_framework.permissions import AllowAny
 from .permissions import IsStaff, IsSubscribedUser
@@ -19,7 +20,10 @@ from .serializers import (
     OrderSerializer, CartItemSerializer, CartItemDetialSerializer
 )
 
-
+@extend_schema(
+    request=CartItemSerializer,
+    responses={200: CartItemSerializer}
+)
 class CartListView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET', 'POST', 'DELETE']:
@@ -30,7 +34,7 @@ class CartListView(APIView):
 
     def get(self, request):
         cart, created = Cart.objects.get_or_create(user=request.user)
-        cart_items = cart.cart_items.all()
+        cart_items = cart.cart_items.all() 
         paginator = MenuInfiniteScrollPagination()
         queryset = paginator.paginate_queryset(cart_items, request)
         serializer = CartItemSerializer(queryset, many=True)
@@ -149,7 +153,10 @@ class CartListView(APIView):
                 status=status.HTTP_204_NO_CONTENT
             )
 
-
+@extend_schema(
+    request=CartItemSerializer,
+    responses={200: CartItemSerializer}
+)
 class CartItemDetailView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET', 'DELETE']:
@@ -180,6 +187,10 @@ class CartItemDetailView(APIView):
         )
 
 
+@extend_schema(
+    request=CartItemSerializer,
+    responses={200: CartItemSerializer}
+)
 class CartItemUpdateView(APIView):
     permission_classes = [IsSubscribedUser]
 
@@ -292,7 +303,10 @@ class OrderPreviewView(APIView):
 
         return Response(preview, status=status.HTTP_200_OK)
 
-
+@extend_schema(
+    request=OrderSerializer,
+    responses={200: OrderSerializer}
+)
 class OrderListView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -310,7 +324,10 @@ class OrderListView(APIView):
         serializer = OrderSerializer(orders, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
-
+@extend_schema(
+    request=OrderSerializer,
+    responses={200: OrderSerializer}
+)
 class OrderDetailView(APIView):
     def get_permissions(self):
         if self.request.method in ['GET']:
@@ -369,7 +386,10 @@ class OrderCancelView(APIView):
             "order": serializer.data
         }, status=status.HTTP_200_OK)
 
-
+@extend_schema(
+    request=OrderSerializer,
+    responses={200: OrderSerializer}
+)
 class OrderCreateView(APIView):
     permission_classes = [IsSubscribedUser]
 
@@ -388,7 +408,7 @@ class OrderCreateView(APIView):
                 {"error": "Your cart is empty"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-        
+            
         cart_item_ids = request.data.get('cart_ids')
 
         cart_items = cart.cart_items.all()
