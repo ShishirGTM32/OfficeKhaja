@@ -1,8 +1,10 @@
 import json
+import asyncio
 from channels.generic.websocket import AsyncWebsocketConsumer
 from channels.db import database_sync_to_async
 from asgiref.sync import sync_to_async
 from django.core.cache import cache
+from django.utils import timezone
 from users.models import CustomUser
 from .models import Conversation, Message
 import logging
@@ -17,12 +19,13 @@ except Exception as e:
 
 
 class ConnectionCounter:
-    TTL = 300
+    TTL = 30
     
     def __init__(self, user_id, is_staff=False):
         self.user_id = str(user_id)
         self.key = f"user:{self.user_id}:connections"
-        self.online_set = "online"
+        self.heartbeat_key = f"user:{self.user_id}:last_heartbeat"
+        self.online_set = "online_staff" if is_staff else "online_users"
         self.is_staff = is_staff
 
     @sync_to_async
@@ -30,6 +33,8 @@ class ConnectionCounter:
         try:
             count = cache.get(self.key, 0) + 1
             cache.set(self.key, count, timeout=self.TTL)
+            cache.set(f"user:{self.user_id}:status", "online", timeout=self.TTL)
+            cache.set(self.heartbeat_key, timezone.now().timestamp(), timeout=self.TTL)
             
             if redis_instance:
                 redis_instance.sadd(self.online_set, self.user_id)
@@ -50,6 +55,9 @@ class ConnectionCounter:
             count = cache.get(self.key, 0)
             if count <= 1:
                 cache.delete(self.key)
+                cache.delete(self.heartbeat_key)
+                cache.set(f"user:{self.user_id}:status", "offline", timeout=60)
+                
                 if redis_instance:
                     redis_instance.srem(self.online_set, self.user_id)
                     redis_instance.publish("user_status_channel", json.dumps({
@@ -74,6 +82,19 @@ class ConnectionCounter:
             logger.error(f"Error getting connection count: {e}")
             return 0
 
+    @sync_to_async
+    def heartbeat(self):
+        """Update heartbeat timestamp to indicate connection is alive"""
+        try:
+            count = cache.get(self.key)
+            if count:
+                cache.set(self.key, count, timeout=self.TTL)
+                cache.set(f"user:{self.user_id}:status", "online", timeout=self.TTL)
+                cache.set(self.heartbeat_key, timezone.now().timestamp(), timeout=self.TTL)
+                logger.debug(f"Heartbeat updated for user {self.user_id}")
+        except Exception as e:
+            logger.error(f"Error updating heartbeat: {e}")
+
     async def is_online(self):
         count = await self.get_count()
         return count > 0
@@ -86,7 +107,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if not self.user or not self.user.is_authenticated:
                 logger.warning("Unauthenticated connection attempt")
                 await self.close(code=4001)
-                return  
+                return
 
             self.cid = self.scope["url_route"]["kwargs"].get("conversation_id")
             if not self.cid:
@@ -111,23 +132,23 @@ class ChatConsumer(AsyncWebsocketConsumer):
             await self.accept()
 
             self.counter = ConnectionCounter(self.user.id, self.user.is_staff)
-            await self.counter.increment()
-            await self.set_user_status_online()
+            count = await self.counter.increment()
 
-            await self.channel_layer.group_send(
-                self.room_name,
-                {
-                    "type": "user_status_update",
-                    "user_id": str(self.user.id),
-                    "status": "online",
-                    "is_staff": self.user.is_staff
-                }
-            )
+            if count == 1:
+                await self.channel_layer.group_send(
+                    self.room_name,
+                    {
+                        "type": "user_status_update",
+                        "user_id": str(self.user.id),
+                        "status": "online",
+                        "is_staff": self.user.is_staff
+                    }
+                )
 
             await self.send_online_list()
             await self.send_unread_messages()
 
-            logger.info(f"User {self.user.id} connected to conversation {self.cid}")
+            logger.info(f"User {self.user.id} ({'staff' if self.user.is_staff else 'user'}) connected to conversation {self.cid}")
 
         except Exception as e:
             logger.error(f"Error in connect: {e}", exc_info=True)
@@ -138,7 +159,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
             if hasattr(self, "counter") and self.counter:
                 count = await self.counter.decrement()
                 if count == 0:
-                    await self.set_user_status_offline()
                     if hasattr(self, "room_name"):
                         await self.channel_layer.group_send(
                             self.room_name,
@@ -165,16 +185,26 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             data = json.loads(text_data)
             msg_type = data.get("type")
-
+            
+            logger.info(f"Received message from user {self.user.id}: type={msg_type}")
+            
             if msg_type == "chat_message":
-                messages = await self.get_unread_messages()
-                if messages:
+                unread = await self.get_unread_messages()
+                if unread:
                     await self.handle_read_receipt(data)
                 await self.handle_chat_message(data)
             elif msg_type == "read":
                 await self.handle_read_receipt(data)
             elif msg_type == "typing":
                 await self.handle_typing(data)
+            elif msg_type == "heartbeat":
+                await self.counter.heartbeat()
+                # Send acknowledgment
+                await self.send(text_data=json.dumps({
+                    "type": "heartbeat_ack",
+                    "timestamp": timezone.now().isoformat()
+                }))
+                await self.send_online_list()
             else:
                 logger.warning(f"Unknown message type: {msg_type}")
 
@@ -186,13 +216,17 @@ class ChatConsumer(AsyncWebsocketConsumer):
     async def handle_chat_message(self, data):
         text = data.get("text", "").strip()
         if not text:
+            logger.warning("Empty message text received")
             return
 
-        try:
-            message = await self.save_message(text)            
+        try:            
+            message = await self.save_message(text)
+            logger.info(f"Message saved with ID: {message.mid}")
+            
             recipient_id = await self.get_recipient_id()
             recipient_counter = ConnectionCounter(recipient_id, not self.user.is_staff)
             recipient_online = await recipient_counter.is_online()
+
             sender_details = await self.get_sender_details()
 
             payload = {
@@ -205,11 +239,14 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "is_read": False,
                 "recipient_online": recipient_online
             }
-            if recipient_online:
-                await self.channel_layer.group_send(self.room_name, {
-                    "type": "chat_message_handler",
-                    **payload
-                })
+            
+            # Broadcast to all connections in the conversation
+            await self.channel_layer.group_send(self.room_name, {
+                "type": "chat_message_handler",
+                **payload
+            })
+
+            logger.info(f"Message broadcasted successfully by user {self.user.id}")
 
         except Exception as e:
             logger.error(f"Error handling chat message: {e}", exc_info=True)
@@ -217,9 +254,10 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 "type": "error",
                 "message": "Failed to send message"
             }))
-
+    
     async def handle_read_receipt(self, data):
         try:
+            logger.info(f"Handling read receipt from user {self.user.id}")
             await self.mark_messages_as_read(self.user.id)
             await self.channel_layer.group_send(
                 self.room_name,
@@ -228,6 +266,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "user_id": str(self.user.id)
                 }
             )
+            logger.debug(f"Read receipt sent by user {self.user.id}")
         except Exception as e:
             logger.error(f"Error handling read receipt: {e}", exc_info=True)
 
@@ -235,6 +274,8 @@ class ChatConsumer(AsyncWebsocketConsumer):
         try:
             is_typing = data.get("is_typing", False)
             sender_details = await self.get_sender_details()
+            
+            logger.debug(f"Handling typing indicator from user {self.user.id}: {is_typing}")
             
             await self.channel_layer.group_send(
                 self.room_name,
@@ -245,33 +286,37 @@ class ChatConsumer(AsyncWebsocketConsumer):
                     "is_typing": is_typing
                 }
             )
+            logger.debug(f"Typing indicator broadcasted for user {self.user.id}")
         except Exception as e:
             logger.error(f"Error handling typing indicator: {e}", exc_info=True)
 
-
     async def chat_message_handler(self, event):
+        logger.debug(f"chat_message_handler called for user {self.user.id}: {event}")
         await self.send(text_data=json.dumps({
             "type": "chat_message",
             "message": event["message"],
             "message_id": event["message_id"],
             "sender": event["sender"],
             "sender_name": event.get("sender_name", ""),
+            "sender_email": event.get("sender_email", ""),
             "timestamp": event["timestamp"],
             "is_read": event.get("is_read", False),
             "recipient_online": event.get("recipient_online")
         }))
+        logger.debug(f"Message sent to client for user {self.user.id}")
 
     async def read_receipt_handler(self, event):
         user_id = event.get("user_id")
         if user_id != str(self.user.id):
             await self.send(text_data=json.dumps({
-                "type": "read_receipt",
+                "type": "read",
                 "user_id": user_id
             }))
 
     async def typing_indicator(self, event):
         user_id = event.get("user_id")
         if user_id != str(self.user.id):
+            logger.debug(f"Sending typing indicator to user {self.user.id}: {event}")
             await self.send(text_data=json.dumps({
                 "type": "typing",
                 "user_id": user_id,
@@ -289,25 +334,42 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     async def send_online_list(self):
         try:
-            if redis_instance:
-                online_ids = await sync_to_async(redis_instance.smembers)("online")
-
-                online_ids = [id.decode() if isinstance(id, bytes) else str(id) for id in online_ids]
-                users = await self.get_users_by_ids(online_ids)
-            else:
+            if not redis_instance:
                 users = []
+            else:
+                if self.user.is_staff:
+                    candidate_ids = await sync_to_async(redis_instance.smembers)("online_users")
+                else:
+                    candidate_ids = await sync_to_async(redis_instance.smembers)("online_staff")
+
+                online_ids = []
+
+                for raw_id in candidate_ids:
+                    user_id = raw_id.decode() if isinstance(raw_id, bytes) else str(raw_id)
+                    exists = await sync_to_async(cache.get)(f"user:{user_id}:connections")
+                    if exists:
+                        online_ids.append(user_id)
+                    else:
+                        await sync_to_async(redis_instance.srem)(
+                            "online_users" if self.user.is_staff else "online_staff",
+                            user_id
+                        )
+
+                users = await self.get_users_by_ids(online_ids)
+
             await self.send(text_data=json.dumps({
                 "type": "online_users",
                 "users": [
                     {
                         "id": str(u.id),
-                        "name": f"{u.first_name} {u.last_name}",
+                        "name": f"{u.first_name} {u.last_name}".strip() or u.email,
                         "email": u.email,
                         "is_staff": u.is_staff
                     }
                     for u in users
                 ]
             }))
+
         except Exception as e:
             logger.error(f"Error sending online list: {e}", exc_info=True)
 
@@ -329,26 +391,6 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 }))
         except Exception as e:
             logger.error(f"Error sending unread messages: {e}", exc_info=True)
-
-    async def set_user_status_online(self):
-        try:
-            await sync_to_async(cache.set)(
-                f"user:{self.user.id}:status",
-                "online",
-                timeout=300
-            )
-        except Exception as e:
-            logger.error(f"Error setting online status: {e}", exc_info=True)
-
-    async def set_user_status_offline(self):
-        try:
-            await sync_to_async(cache.set)(
-                f"user:{self.user.id}:status",
-                "offline",
-                timeout=300
-            )
-        except Exception as e:
-            logger.error(f"Error setting offline status: {e}", exc_info=True)
 
     @database_sync_to_async
     def get_sender_details(self):
@@ -382,17 +424,20 @@ class ChatConsumer(AsyncWebsocketConsumer):
                 is_read=False
             )
             .exclude(sender=self.user)
+            .select_related('sender')
             .order_by("timestamp")
         )
 
     @database_sync_to_async
     def save_message(self, text):
-        return Message.objects.create(
+        message = Message.objects.create(
             conversation=self.conversation,
             sender=self.user,
             message=text,
             is_read=False
         )
+        logger.info(f"Message saved to database: ID={message.mid}, sender={self.user.id}, text='{text}'")
+        return message
 
     @database_sync_to_async
     def get_recipient_id(self):
@@ -403,17 +448,19 @@ class ChatConsumer(AsyncWebsocketConsumer):
 
     @database_sync_to_async
     def mark_messages_as_read(self, user_id):
-        Message.objects.filter(
+        updated = Message.objects.filter(
             conversation=self.conversation,
             is_read=False
         ).exclude(
             sender_id=user_id
         ).update(is_read=True)
+        logger.debug(f"Marked {updated} messages as read for user {user_id}")
+        return updated
 
     @database_sync_to_async
     def get_conversation_by_id(self, cid):
         try:
-            return Conversation.objects.get(cid=cid)
+            return Conversation.objects.select_related('user').get(cid=cid)
         except Conversation.DoesNotExist:
             return None
 

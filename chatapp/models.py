@@ -30,7 +30,6 @@ class Message(models.Model):
     sender = models.ForeignKey(CustomUser,on_delete=models.CASCADE,related_name="sent_messages")
     is_read = models.BooleanField(default=False)
     message = models.TextField()
-    
     timestamp = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
