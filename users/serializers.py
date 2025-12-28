@@ -40,6 +40,7 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         )
         return user
 
+
 class UserLoginSerializer(serializers.Serializer):
     phone_number = serializers.CharField()
     password = serializers.CharField(write_only=True)
@@ -47,41 +48,54 @@ class UserLoginSerializer(serializers.Serializer):
     def validate(self, data):
         phone_number = data.get('phone_number')
         password = data.get('password')
-        if phone_number and password:
+        
+        if not phone_number or not password:
+            raise serializers.ValidationError('Must include "phone_number" and "password"')
+
+        try:
             user = CustomUser.objects.get(phone_number=phone_number)
-            if user:
-                if not user.is_active:
-                    otp = str(random.randint(100000, 999999))
-                    flow_key = user.email
-                    request = self.context.get('request')
-                    request.session['email'] = flow_key
-                    cache.set(
-                        f"otp_flow:{flow_key}",
-                        {
-                            "user_id": user.id,
-                            "otp_type": "activate",
-                            "otp": otp,
-                            "created_at": timezone.now().isoformat()
-                        },
-                        timeout=300
-                    )
-                    status=False
-                    send_mail(
-                        'Account activation OTP',
-                        f'Your OTP code is {otp}',
-                        settings.DEFAULT_FROM_EMAIL,
-                        [user.email],
-                        fail_silently=False
-                    )
-                    return status
-                else:
-                    user = authenticate(phone_number=phone_number, password=password)
-                    user.last_login = timezone.now()
-            elif not user:
+        except CustomUser.DoesNotExist:
+            raise serializers.ValidationError('Invalid phone number or password')
+        
+        if not user.is_active:
+            if not user.check_password(password):
                 raise serializers.ValidationError('Invalid phone number or password')
-            user.save()
-            return user
-        raise serializers.ValidationError('Must include "phone_number" and "password"')
+            
+            otp = str(random.randint(100000, 999999))
+            flow_key = user.email
+            request = self.context.get('request')
+            request.session['email'] = flow_key
+            
+            cache.set(
+                f"otp_flow:{flow_key}",
+                {
+                    "user_id": user.id,
+                    "otp_type": "activate",
+                    "otp": otp,
+                    "created_at": timezone.now().isoformat()
+                },
+                timeout=300
+            )
+            
+            send_mail(
+                'Account activation OTP',
+                f'Your OTP code is {otp}',
+                settings.DEFAULT_FROM_EMAIL,
+                [user.email],
+                fail_silently=False
+            )
+            
+            return False 
+        
+        authenticated_user = authenticate(phone_number=phone_number, password=password)
+        
+        if not authenticated_user:
+            raise serializers.ValidationError('Invalid phone number or password')
+        
+        authenticated_user.last_login = timezone.now()
+        authenticated_user.save()
+        
+        return authenticated_user
 
 
 class SubscriptionSerializer(serializers.ModelSerializer):
@@ -93,8 +107,8 @@ class SubscriptionSerializer(serializers.ModelSerializer):
 
 class UserSubscriptionSerializer(serializers.ModelSerializer):
     plan_details = SubscriptionSerializer(source='plan', read_only=True)
-    days_remaining = serializers.IntegerField(read_only=True)
-    is_expired = serializers.BooleanField(read_only=True)
+    days_remaining = serializers.SerializerMethodField()
+    is_expired = serializers.SerializerMethodField()
     
     class Meta:
         model = UserSubscription
@@ -104,13 +118,24 @@ class UserSubscriptionSerializer(serializers.ModelSerializer):
             'created_at', 'updated_at'
         ]
         read_only_fields = ['sub_id', 'created_at', 'updated_at', 'expires_on']
+    
+    def get_days_remaining(self, obj):
+        if obj.expires_on:
+            delta = obj.expires_on - timezone.now().date()
+            return max(0, delta.days)
+        return 0
+    
+    def get_is_expired(self, obj):
+        if obj.expires_on:
+            return obj.expires_on < timezone.now().date()
+        return True
 
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
         fields = [
-            'id', 'phone_number', 'email', 'first_name', 'last_name', 'organization_name','image',
+            'id', 'phone_number', 'email', 'first_name', 'last_name', 'organization_name', 'image',
             'user_type', 'no_of_peoples', 'payment_method', 'street_address',
             'city', 'status', 'meal_preferences', 'is_active', 
             'created_at', 'updated_at'
@@ -118,11 +143,12 @@ class UserSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'created_at', 'updated_at', 'status', 'phone_number']
 
     def validate_payment_method(self, value):
-        valid_methods = [choice[0] for choice in CustomUser.PAYMENT_METHOD]
-        if value not in valid_methods:
-            raise serializers.ValidationError(
-                f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
-            )
+        if value:
+            valid_methods = [choice[0] for choice in CustomUser.PAYMENT_METHOD]
+            if value not in valid_methods:
+                raise serializers.ValidationError(
+                    f"Invalid payment method. Choose from: {', '.join(valid_methods)}"
+                )
         return value
 
     def validate(self, data):
@@ -143,6 +169,7 @@ class UserSerializer(serializers.ModelSerializer):
             'last_name',
             instance.last_name if instance else None
         )
+        
         if user_type == "ORGANIZATIONS" and not organization_name:
             raise serializers.ValidationError(
                 {"organization_name": "Organization name is required for organizations"}
@@ -157,14 +184,21 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class OTPSerializer(serializers.Serializer):
-    otp = serializers.CharField()
+    email = serializers.EmailField(required=False)
+    otp = serializers.CharField(required=True)
 
     def validate(self, data):
         request = self.context.get('request')
-        otp_token = request.session['email']
-        otp_input = data['otp']
+        email = data.get('email')
+        otp_input = data.get('otp')
+        
+        if not email:
+            raise serializers.ValidationError("Email is required")
+        
+        if not otp_input:
+            raise serializers.ValidationError("OTP is required")
 
-        cache_key = f"otp_flow:{otp_token}"
+        cache_key = f"otp_flow:{email}"
         cached_data = cache.get(cache_key)
 
         if not cached_data:
@@ -172,25 +206,31 @@ class OTPSerializer(serializers.Serializer):
 
         if cached_data['otp'] != otp_input:
             raise serializers.ValidationError("Invalid OTP")
+        
         cache.delete(cache_key)
+        
         data['verified'] = True
         data['user_id'] = cached_data['user_id']
         data['otp_type'] = cached_data['otp_type']
-        del request.session['email']
+        
         return data
+
 
 class ResetPasswordRequestSerializer(serializers.Serializer):
     email = serializers.EmailField()
 
     def validate_email(self, value):
-        user = CustomUser.objects.filter(email=value).first()
-        if not user:
-            raise serializers.ValidationError("Requested user email not found.")
+        try:
+            user = CustomUser.objects.get(email=value)
+        except CustomUser.DoesNotExist:
+            raise serializers.ValidationError("User with this email does not exist.")
+        
         otp = str(random.randint(100000, 999999))
 
         request = self.context.get('request')
         flow_key = value
         request.session['email'] = value
+        
         cache.set(
             f"otp_flow:{flow_key}",
             {
@@ -209,21 +249,26 @@ class ResetPasswordRequestSerializer(serializers.Serializer):
             [user.email],
             fail_silently=False
         )
+        
         self.user_id = user.id
         self.flow_key = flow_key
         return value
 
 
 class ResetPasswordSerializer(serializers.Serializer):
-    new_password = serializers.CharField()
-    confirm_password = serializers.CharField()
+    new_password = serializers.CharField(min_length=8, write_only=True)
+    confirm_password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        pass1 = data.get('new_password')
-        pass2 = data.get('confirm_password')
+        new_password = data.get('new_password')
+        confirm_password = data.get('confirm_password')
 
-        if pass1 != pass2:
+        if not new_password or not confirm_password:
+            raise serializers.ValidationError("Both password fields are required.")
+
+        if new_password != confirm_password:
             raise serializers.ValidationError("Password fields must match.")
 
         return data
-
+    
+    

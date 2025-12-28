@@ -54,8 +54,8 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     ]
 
     USER_TYPE = [
-        ("INDIVIDUALS", "Individuals"),
-        ("ORGANIZATIONS", "Organizations")
+        ("INDIVIDUAL", "Individual"),
+        ("ORGANIZATION", "Organization")
     ]
 
     phone_number = models.CharField(
@@ -76,7 +76,7 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     )
 
     image = models.ImageField(upload_to='profile/', null=True, blank=True)
-    user_type = models.CharField(max_length=20, choices=USER_TYPE, default="INDIVIDUALS")
+    user_type = models.CharField(max_length=20, choices=USER_TYPE, default="INDIVIDUAL")
     no_of_peoples = models.IntegerField(default=1)
     payment_method = models.CharField(max_length=255, choices=PAYMENT_METHOD, default='ESEWA')
     street_address = models.CharField(max_length=255, null=True, blank=True)
@@ -100,7 +100,6 @@ class CustomUser(AbstractBaseUser, PermissionsMixin):
     class Meta:
         verbose_name = "User"
         verbose_name_plural = "Users"
-
 
 class UserSubscription(models.Model):
     sub_id = models.AutoField(primary_key=True)
